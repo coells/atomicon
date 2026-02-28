@@ -35,6 +35,24 @@ const JOKER_THEME: CellTheme = {
     nucleus: "#d6a72f",
 };
 
+type FaceStyle = {
+    eyeScale: number;
+    eyeY: number;
+    eyeTilt: number;
+    mouth: "smile" | "flat" | "o" | "grin" | "wink" | "cheeky" | "happy";
+    blush?: boolean;
+};
+
+const FACE_STYLES: FaceStyle[] = [
+    { eyeScale: 1, eyeY: -0.16, eyeTilt: -0.06, mouth: "smile", blush: true },
+    { eyeScale: 0.88, eyeY: -0.13, eyeTilt: 0, mouth: "o" },
+    { eyeScale: 1.05, eyeY: -0.15, eyeTilt: 0.05, mouth: "happy", blush: true },
+    { eyeScale: 0.92, eyeY: -0.14, eyeTilt: 0.03, mouth: "grin" },
+    { eyeScale: 0.85, eyeY: -0.16, eyeTilt: -0.04, mouth: "wink", blush: true },
+    { eyeScale: 1, eyeY: -0.12, eyeTilt: 0.02, mouth: "cheeky" },
+    { eyeScale: 1.08, eyeY: -0.13, eyeTilt: 0.01, mouth: "flat" },
+];
+
 export class Renderer {
     private canvas: HTMLCanvasElement;
     private ctx: CanvasRenderingContext2D;
@@ -201,6 +219,8 @@ export class Renderer {
         ctx.fillStyle = bg;
         ctx.fillRect(0, 0, this.boardSize, this.boardSize);
 
+        this.drawSceneParticles();
+
         const wave = Math.sin(this.animFrame * 0.015) * 0.05 + 1;
         for (const pos of this.validPositions) {
             const center = this.centers.get(this.posKey(pos));
@@ -256,6 +276,25 @@ export class Renderer {
 
         this.updateAnimations();
         this.selectedBounce += 0.14;
+    }
+
+    private drawSceneParticles() {
+        const ctx = this.ctx;
+        const t = this.animFrame * 0.01;
+        const count = 28;
+
+        for (let i = 0; i < count; i++) {
+            const px = ((i * 139 + t * 240) % (this.boardSize + 90)) - 45;
+            const py = ((i * 83 + t * 120 + Math.sin(i * 1.3 + t * 2) * 28) % (this.boardSize + 90)) - 45;
+            const r = 1.8 + (i % 4) * 0.8;
+            const glow = ctx.createRadialGradient(px, py, 0, px, py, r * 3);
+            glow.addColorStop(0, "rgba(174, 219, 255, 0.5)");
+            glow.addColorStop(1, "rgba(174, 219, 255, 0)");
+            ctx.fillStyle = glow;
+            ctx.beginPath();
+            ctx.arc(px, py, r * 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
 
     private interpolatedPathPosition(path: Position[], progress: number): { x: number; y: number } {
@@ -334,9 +373,13 @@ export class Renderer {
         const ctx = this.ctx;
         const radius = this.hexRadius * 0.52 * scale;
         const theme = color === JOKER_COLOR ? JOKER_THEME : CELL_THEMES[color % CELL_THEMES.length];
+        const t = this.animFrame * 0.04;
 
         ctx.save();
         ctx.globalAlpha = alpha;
+
+        const bob = Math.sin(t + (cx + cy) * 0.01) * radius * 0.03;
+        cy += bob;
 
         const glow = ctx.createRadialGradient(cx, cy, radius * 0.25, cx, cy, radius * 1.8);
         glow.addColorStop(0, theme.glow);
@@ -366,10 +409,10 @@ export class Renderer {
         ctx.arc(cx, cy, radius, 0, Math.PI * 2);
         ctx.fill();
 
-        const t = this.animFrame * 0.022;
+        const swirlT = this.animFrame * 0.022;
         ctx.globalAlpha = alpha * 0.35;
         for (let i = 0; i < 3; i++) {
-            const angle = t + (i * Math.PI * 2) / 3;
+            const angle = swirlT + (i * Math.PI * 2) / 3;
             const ox = cx + Math.cos(angle) * radius * 0.35;
             const oy = cy + Math.sin(angle) * radius * 0.35;
             ctx.fillStyle = theme.nucleus;
@@ -389,9 +432,105 @@ export class Renderer {
 
         if (color === JOKER_COLOR) {
             this.drawJokerSymbol(cx, cy, radius * 0.52, alpha);
+            this.drawFace(cx, cy, radius * 0.86, FACE_STYLES[0], t, true);
+        } else {
+            this.drawFace(cx, cy, radius * 0.9, FACE_STYLES[color % FACE_STYLES.length], t);
         }
 
         ctx.restore();
+    }
+
+    private drawFace(cx: number, cy: number, r: number, style: FaceStyle, t: number, joker = false) {
+        const ctx = this.ctx;
+        const blink = Math.sin(t * 0.35 + cx * 0.04 + cy * 0.03) > 0.92 ? 0.2 : 1;
+
+        const eyeY = cy + r * style.eyeY;
+        const eyeDX = r * 0.28;
+        const eyeW = r * 0.12 * style.eyeScale;
+        const eyeH = r * 0.16 * blink;
+
+        if (style.blush) {
+            ctx.fillStyle = "rgba(255,190,205,0.25)";
+            ctx.beginPath();
+            ctx.ellipse(cx - r * 0.38, cy + r * 0.07, r * 0.12, r * 0.07, 0, 0, Math.PI * 2);
+            ctx.ellipse(cx + r * 0.38, cy + r * 0.07, r * 0.12, r * 0.07, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.save();
+        ctx.translate(cx - eyeDX, eyeY);
+        ctx.rotate(style.eyeTilt);
+        ctx.fillStyle = "rgba(17, 24, 37, 0.85)";
+        ctx.beginPath();
+        ctx.ellipse(0, 0, eyeW, eyeH, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        if (style.mouth !== "wink") {
+            ctx.save();
+            ctx.translate(cx + eyeDX, eyeY);
+            ctx.rotate(-style.eyeTilt);
+            ctx.fillStyle = "rgba(17, 24, 37, 0.85)";
+            ctx.beginPath();
+            ctx.ellipse(0, 0, eyeW, eyeH, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        } else {
+            ctx.strokeStyle = "rgba(17, 24, 37, 0.85)";
+            ctx.lineWidth = r * 0.07;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(cx + eyeDX - r * 0.08, eyeY);
+            ctx.lineTo(cx + eyeDX + r * 0.08, eyeY);
+            ctx.stroke();
+        }
+
+        ctx.strokeStyle = joker ? "rgba(77, 39, 0, 0.8)" : "rgba(30, 39, 58, 0.82)";
+        ctx.fillStyle = joker ? "rgba(255, 227, 156, 0.85)" : "rgba(236, 245, 255, 0.6)";
+        ctx.lineWidth = r * 0.06;
+        const mouthY = cy + r * 0.2;
+
+        switch (style.mouth) {
+            case "smile":
+            case "happy":
+                ctx.beginPath();
+                ctx.arc(cx, mouthY - r * 0.04, r * (style.mouth === "happy" ? 0.22 : 0.18), 0.2, Math.PI - 0.2);
+                ctx.stroke();
+                break;
+            case "grin":
+                ctx.beginPath();
+                ctx.arc(cx, mouthY - r * 0.03, r * 0.19, 0.15, Math.PI - 0.15);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(cx - r * 0.12, mouthY + r * 0.05);
+                ctx.lineTo(cx + r * 0.12, mouthY + r * 0.05);
+                ctx.stroke();
+                break;
+            case "flat":
+                ctx.beginPath();
+                ctx.moveTo(cx - r * 0.16, mouthY + r * 0.02);
+                ctx.lineTo(cx + r * 0.16, mouthY + r * 0.02);
+                ctx.stroke();
+                break;
+            case "o":
+                ctx.beginPath();
+                ctx.ellipse(cx, mouthY, r * 0.09, r * 0.11, 0, 0, Math.PI * 2);
+                ctx.stroke();
+                break;
+            case "cheeky":
+                ctx.beginPath();
+                ctx.arc(cx - r * 0.03, mouthY - r * 0.02, r * 0.16, 0.1, Math.PI - 0.5);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.ellipse(cx + r * 0.12, mouthY + r * 0.03, r * 0.05, r * 0.08, 0, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+            default:
+                ctx.beginPath();
+                ctx.arc(cx, mouthY, r * 0.17, 0.2, Math.PI - 0.2);
+                ctx.stroke();
+                break;
+        }
     }
 
     private drawJokerSymbol(cx: number, cy: number, r: number, alpha: number) {

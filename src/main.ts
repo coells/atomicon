@@ -21,13 +21,213 @@ import { Renderer } from "./renderer";
 
 class SFX {
     private actx: AudioContext | null = null;
+    private musicTimer: number | null = null;
+    private musicStep = 0;
+    private songIndex = 0;
+    private sfxEnabled = true;
+    private musicEnabled = true;
+
+    private readonly musicTickMs = 240;
+
+    private readonly songs = [
+        {
+            name: "Greensleeves",
+            melody: [
+                69, 72, 74, 76, 74, 72, 71, 69, 67, 69, 71, 72, 71, 69, 67, -1, 69, 72, 74, 76, 79, 76, 74, 72, 71, 72,
+                74, 71, 69, 67, 69, -1,
+            ],
+            bass: [45, -1, 45, -1, 43, -1, 43, -1, 41, -1, 41, -1, 43, -1, 43, -1],
+            chordRoots: [57, 57, 55, 55, 53, 53, 55, 55],
+        },
+        {
+            name: "Ode to Joy",
+            melody: [
+                64, 64, 65, 67, 67, 65, 64, 62, 60, 60, 62, 64, 64, 62, 62, -1, 64, 64, 65, 67, 67, 65, 64, 62, 60, 60,
+                62, 64, 62, 60, 60, -1,
+            ],
+            bass: [48, -1, 48, -1, 55, -1, 55, -1, 53, -1, 53, -1, 55, -1, 55, -1],
+            chordRoots: [60, 60, 67, 67, 65, 65, 67, 67],
+        },
+        {
+            name: "Sakura",
+            melody: [
+                64, 67, 69, 67, 69, 71, 69, 67, 64, 67, 69, 67, 64, 62, 64, -1, 64, 67, 69, 71, 72, 71, 69, 67, 69, 67,
+                64, 62, 60, 62, 64, -1,
+            ],
+            bass: [45, -1, 45, -1, 47, -1, 47, -1, 43, -1, 43, -1, 45, -1, 45, -1],
+            chordRoots: [57, 57, 59, 59, 55, 55, 57, 57],
+        },
+    ] as const;
 
     private ensure() {
         if (!this.actx) this.actx = new AudioContext();
         return this.actx;
     }
 
+    async unlock() {
+        const ctx = this.ensure();
+        if (ctx.state === "suspended") {
+            await ctx.resume();
+        }
+    }
+
+    setSfxEnabled(enabled: boolean) {
+        this.sfxEnabled = enabled;
+    }
+
+    setMusicEnabled(enabled: boolean) {
+        this.musicEnabled = enabled;
+        if (!enabled) {
+            if (this.musicTimer !== null) {
+                window.clearInterval(this.musicTimer);
+                this.musicTimer = null;
+            }
+            return;
+        }
+        this.startMusic();
+    }
+
+    getSfxEnabled() {
+        return this.sfxEnabled;
+    }
+
+    getMusicEnabled() {
+        return this.musicEnabled;
+    }
+
+    startMusic() {
+        if (!this.musicEnabled || this.musicTimer !== null) return;
+        this.musicStep = 0;
+        this.songIndex = Math.floor(Math.random() * this.songs.length);
+        this.musicTimer = window.setInterval(() => {
+            if (!this.musicEnabled) return;
+            this.playMusicStep();
+        }, this.musicTickMs);
+    }
+
+    private midiToFreq(midi: number): number {
+        return 440 * Math.pow(2, (midi - 69) / 12);
+    }
+
+    private playTone(
+        frequency: number,
+        opts: {
+            duration: number;
+            volume: number;
+            type: OscillatorType;
+            attack?: number;
+            release?: number;
+            detune?: number;
+        },
+    ) {
+        const ctx = this.ensure();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.type = opts.type;
+        osc.frequency.value = frequency;
+        if (opts.detune) osc.detune.value = opts.detune;
+
+        const now = ctx.currentTime;
+        const attack = opts.attack ?? 0.02;
+        const release = opts.release ?? opts.duration;
+
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(opts.volume, now + attack);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + release);
+
+        osc.start(now);
+        osc.stop(now + opts.duration);
+    }
+
+    private playMusicStep() {
+        const ctx = this.ensure();
+        if (ctx.state !== "running") return;
+
+        const song = this.songs[this.songIndex % this.songs.length];
+        const step = this.musicStep % song.melody.length;
+
+        const melodyMidi = song.melody[step];
+        if (melodyMidi >= 0) {
+            const melodyFreq = this.midiToFreq(melodyMidi);
+            this.playTone(melodyFreq, {
+                duration: 0.25,
+                volume: 0.04,
+                type: "triangle",
+                attack: 0.01,
+                release: 0.22,
+            });
+
+            if (step % 8 === 0 || Math.random() > 0.86) {
+                this.playTone(melodyFreq * 2, {
+                    duration: 0.18,
+                    volume: 0.012,
+                    type: "sine",
+                    attack: 0.01,
+                    release: 0.16,
+                    detune: 4,
+                });
+            }
+        }
+
+        if (step % 2 === 0) {
+            const bass = song.bass[(step / 2) % song.bass.length];
+            if (bass >= 0) {
+                this.playTone(this.midiToFreq(bass), {
+                    duration: 0.4,
+                    volume: 0.018,
+                    type: "sine",
+                    attack: 0.02,
+                    release: 0.34,
+                });
+            }
+        }
+
+        if (step % 4 === 0) {
+            const root = song.chordRoots[(step / 4) % song.chordRoots.length];
+            const chord = [root, root + 4, root + 7];
+            chord.forEach((midi, idx) => {
+                this.playTone(this.midiToFreq(midi), {
+                    duration: 0.62,
+                    volume: 0.012 / (idx + 1),
+                    type: "sawtooth",
+                    attack: 0.03,
+                    release: 0.56,
+                    detune: idx * 3,
+                });
+            });
+        }
+
+        if (step % 4 === 2) {
+            const noise = ctx.createBufferSource();
+            const buffer = ctx.createBuffer(1, 2205, ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < data.length; i++) {
+                data[i] = (Math.random() * 2 - 1) * 0.08 * (1 - i / data.length);
+            }
+            const filter = ctx.createBiquadFilter();
+            filter.type = "highpass";
+            filter.frequency.value = 1400;
+            const gain = ctx.createGain();
+            gain.gain.value = 0.02;
+            noise.buffer = buffer;
+            noise.connect(filter);
+            filter.connect(gain);
+            gain.connect(ctx.destination);
+            noise.start();
+            noise.stop(ctx.currentTime + 0.08);
+        }
+
+        if (step === song.melody.length - 1) {
+            this.songIndex = (this.songIndex + 1) % this.songs.length;
+        }
+        this.musicStep++;
+    }
+
     pop() {
+        if (!this.sfxEnabled) return;
         const ctx = this.ensure();
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -43,6 +243,7 @@ class SFX {
     }
 
     move() {
+        if (!this.sfxEnabled) return;
         const ctx = this.ensure();
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -58,6 +259,7 @@ class SFX {
     }
 
     score() {
+        if (!this.sfxEnabled) return;
         const ctx = this.ensure();
         const notes = [523, 659, 784, 1047];
         notes.forEach((freq, i) => {
@@ -75,6 +277,7 @@ class SFX {
     }
 
     combo() {
+        if (!this.sfxEnabled) return;
         const ctx = this.ensure();
         const notes = [659, 784, 988, 1318];
         notes.forEach((freq, i) => {
@@ -92,6 +295,7 @@ class SFX {
     }
 
     error() {
+        if (!this.sfxEnabled) return;
         const ctx = this.ensure();
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -107,6 +311,7 @@ class SFX {
     }
 
     gameOver() {
+        if (!this.sfxEnabled) return;
         const ctx = this.ensure();
         const notes = [400, 350, 300, 200];
         notes.forEach((freq, i) => {
@@ -160,6 +365,11 @@ class MicroCellsGame {
     private comboEl: HTMLElement;
     private overlay: HTMLElement;
     private finalScoreEl: HTMLElement;
+    private leaderboardEl: HTMLOListElement;
+    private toggleSfxBtn: HTMLButtonElement;
+    private toggleMusicBtn: HTMLButtonElement;
+
+    private readonly leaderboardKey = "microcells_leaderboard";
 
     constructor() {
         const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
@@ -171,6 +381,9 @@ class MicroCellsGame {
         this.messageEl = document.getElementById("message")!;
         this.overlay = document.getElementById("overlay")!;
         this.finalScoreEl = document.getElementById("final-score")!;
+        this.leaderboardEl = document.getElementById("leaderboard") as HTMLOListElement;
+        this.toggleSfxBtn = document.getElementById("toggle-sfx-btn") as HTMLButtonElement;
+        this.toggleMusicBtn = document.getElementById("toggle-music-btn") as HTMLButtonElement;
         this.nextDots = [];
         for (let i = 0; i < PREVIEW_SIZE; i++) {
             const dot = document.getElementById(`next${i}`);
@@ -179,6 +392,11 @@ class MicroCellsGame {
         this.difficultyEl = document.getElementById("difficulty")!;
         this.comboEl = document.getElementById("combo")!;
 
+        const savedSfx = localStorage.getItem("microcells_sfx");
+        const savedMusic = localStorage.getItem("microcells_music");
+        this.sfx.setSfxEnabled(savedSfx !== "off");
+        this.sfx.setMusicEnabled(savedMusic !== "off");
+
         this.best = parseInt(localStorage.getItem("microcells_best") || "0", 10);
         this.bestEl.textContent = String(this.best);
 
@@ -186,6 +404,9 @@ class MicroCellsGame {
         canvas.addEventListener("click", (e) => this.handleClick(e));
         document.getElementById("new-game-btn")!.addEventListener("click", () => this.newGame());
         document.getElementById("play-again-btn")!.addEventListener("click", () => this.newGame());
+        this.toggleSfxBtn.addEventListener("click", () => this.toggleSfx());
+        this.toggleMusicBtn.addEventListener("click", () => this.toggleMusic());
+        window.addEventListener("keydown", (e) => this.handleHotkeys(e));
 
         window.addEventListener("resize", () => {
             this.renderer.resize();
@@ -196,6 +417,78 @@ class MicroCellsGame {
 
         this.newGame();
         this.loop();
+        this.syncAudioButtons();
+        this.renderLeaderboard();
+        void this.sfx.unlock().then(() => this.sfx.startMusic());
+    }
+
+    private handleHotkeys(e: KeyboardEvent) {
+        if (e.key.toLowerCase() === "m") {
+            this.toggleMusic();
+        }
+        if (e.key.toLowerCase() === "s") {
+            this.toggleSfx();
+        }
+    }
+
+    private toggleSfx() {
+        this.sfx.setSfxEnabled(!this.sfx.getSfxEnabled());
+        localStorage.setItem("microcells_sfx", this.sfx.getSfxEnabled() ? "on" : "off");
+        this.syncAudioButtons();
+    }
+
+    private toggleMusic() {
+        const next = !this.sfx.getMusicEnabled();
+        this.sfx.setMusicEnabled(next);
+        localStorage.setItem("microcells_music", next ? "on" : "off");
+        this.syncAudioButtons();
+        if (next) {
+            void this.sfx.unlock().then(() => this.sfx.startMusic());
+        }
+    }
+
+    private syncAudioButtons() {
+        this.toggleSfxBtn.textContent = `SFX: ${this.sfx.getSfxEnabled() ? "ON" : "OFF"}`;
+        this.toggleMusicBtn.textContent = `Music: ${this.sfx.getMusicEnabled() ? "ON" : "OFF"}`;
+        this.toggleSfxBtn.classList.toggle("off", !this.sfx.getSfxEnabled());
+        this.toggleMusicBtn.classList.toggle("off", !this.sfx.getMusicEnabled());
+    }
+
+    private getLeaderboard(): number[] {
+        const raw = localStorage.getItem(this.leaderboardKey);
+        if (!raw) return [];
+        try {
+            const parsed = JSON.parse(raw) as unknown;
+            if (!Array.isArray(parsed)) return [];
+            return parsed
+                .map((item) => Number(item))
+                .filter((v) => Number.isFinite(v) && v >= 0)
+                .sort((a, b) => b - a)
+                .slice(0, 5);
+        } catch {
+            return [];
+        }
+    }
+
+    private storeLeaderboard(scores: number[]) {
+        localStorage.setItem(this.leaderboardKey, JSON.stringify(scores.slice(0, 5)));
+    }
+
+    private submitLeaderboard(score: number) {
+        const scores = this.getLeaderboard();
+        scores.push(score);
+        scores.sort((a, b) => b - a);
+        this.storeLeaderboard(scores.slice(0, 5));
+        this.renderLeaderboard();
+    }
+
+    private renderLeaderboard() {
+        const scores = this.getLeaderboard();
+        const rows = Array.from({ length: 5 }, (_, i) => {
+            const value = scores[i] ?? 0;
+            return `<li><span>#${i + 1}</span><strong>${value}</strong></li>`;
+        });
+        this.leaderboardEl.innerHTML = rows.join("");
     }
 
     // ─── Game lifecycle ────────────────────────────────────────────────────
@@ -246,6 +539,7 @@ class MicroCellsGame {
 
     private handleClick(e: MouseEvent) {
         if (this.phase !== Phase.SELECT) return;
+        void this.sfx.unlock().then(() => this.sfx.startMusic());
 
         const rect = this.renderer.getCanvas().getBoundingClientRect();
         const x = e.clientX - rect.left;
@@ -421,6 +715,7 @@ class MicroCellsGame {
     private gameOver() {
         this.phase = Phase.GAME_OVER;
         this.sfx.gameOver();
+        this.submitLeaderboard(this.score);
         this.finalScoreEl.textContent = String(this.score);
         this.overlay.classList.add("visible");
         this.setMessage("Game Over");

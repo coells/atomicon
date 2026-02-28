@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#2f5e8a" stop-opacity="0.55"/>
+      <stop offset="45%" stop-color="#1a2f53" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#0a1020" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="blobA" cx="35%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#8de8ff" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#8de8ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="blobB" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#7fefce" stop-opacity="0.48"/>
+      <stop offset="100%" stop-color="#7fefce" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="blobC" cx="55%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#caa3ff" stop-opacity="0.42"/>
+      <stop offset="100%" stop-color="#caa3ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+
+  <g filter="url(#soft)">
+    <ellipse cx="380" cy="270" rx="300" ry="220" fill="url(#blobA)"/>
+    <ellipse cx="1460" cy="220" rx="360" ry="260" fill="url(#blobC)"/>
+    <ellipse cx="980" cy="760" rx="520" ry="320" fill="url(#blobB)"/>
+    <ellipse cx="240" cy="860" rx="340" ry="220" fill="url(#blobC)"/>
+    <ellipse cx="1680" cy="840" rx="300" ry="210" fill="url(#blobA)"/>
+  </g>
+
+  <g stroke="#d0eaff" stroke-opacity="0.18" fill="none">
+    <path d="M130 230c110-90 260-90 370 0 90 70 190 80 300 18 95-54 205-52 305 9" stroke-width="2"/>
+    <path d="M540 940c120-120 270-140 425-48 108 65 240 74 362 16" stroke-width="1.7"/>
+    <path d="M1240 360c75-68 170-70 250-6 64 50 140 58 226 12" stroke-width="1.5"/>
+  </g>
+
+  <g fill="#ffffff" fill-opacity="0.17">
+    <circle cx="190" cy="150" r="4"/>
+    <circle cx="310" cy="500" r="3"/>
+    <circle cx="710" cy="180" r="5"/>
+    <circle cx="860" cy="430" r="4"/>
+    <circle cx="1140" cy="200" r="3"/>
+    <circle cx="1320" cy="510" r="4"/>
+    <circle cx="1620" cy="390" r="5"/>
+    <circle cx="1740" cy="140" r="3"/>
+    <circle cx="260" cy="860" r="5"/>
+    <circle cx="650" cy="760" r="4"/>
+    <circle cx="980" cy="940" r="3"/>
+    <circle cx="1320" cy="860" r="5"/>
+    <circle cx="1690" cy="930" r="4"/>
+  </g>
+</svg>

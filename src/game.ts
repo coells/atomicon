@@ -5,7 +5,7 @@ export const NUM_COLORS = 7;
 export const JOKER_COLOR = NUM_COLORS;
 export const EMPTY_COLOR = -1;
 export const BLOCKED_COLOR = -2;
-export const MIN_MATCH = 4;
+export const MIN_MATCH = 5;
 export const PREVIEW_SIZE = 5;
 
 export type CellColor = number;
