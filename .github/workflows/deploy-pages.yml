@@ -21,6 +21,9 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v4
 
+            - name: Setup Pages
+              uses: actions/configure-pages@v5
+
             - name: Setup pnpm
               uses: pnpm/action-setup@v4
               with:
@@ -37,6 +40,20 @@ jobs:
 
             - name: Build
               run: pnpm build
+
+            - name: Verify built entrypoint
+              run: |
+                  if grep -q '/src/main.ts' dist/index.html; then
+                    echo "ERROR: dist/index.html still points to source entry /src/main.ts"
+                    exit 1
+                  fi
+                  if ! grep -q '/atomicon/assets/' dist/index.html; then
+                    echo "ERROR: dist/index.html does not contain expected /atomicon/assets/ base path"
+                    exit 1
+                  fi
+
+            - name: Add .nojekyll
+              run: touch dist/.nojekyll
 
             - name: Upload Pages artifact
               uses: actions/upload-pages-artifact@v3
