@@ -1,11 +1,16 @@
 import {
     checkLines,
+    countOccupied,
     createEmptyGrid,
     findPath,
     generateNextColors,
+    getSpawnCount,
+    hasAnyMove,
     isBoardFull,
+    PREVIEW_SIZE,
     removeMatches,
     spawnCells,
+    VALID_CELL_COUNT,
     type CellColor,
     type Grid,
     type Position,
@@ -37,6 +42,21 @@ class SFX {
         osc.stop(ctx.currentTime + 0.15);
     }
 
+    move() {
+        const ctx = this.ensure();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(260, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(520, ctx.currentTime + 0.14);
+        gain.gain.setValueAtTime(0.08, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.18);
+    }
+
     score() {
         const ctx = this.ensure();
         const notes = [523, 659, 784, 1047];
@@ -51,6 +71,23 @@ class SFX {
             gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.08 + 0.2);
             osc.start(ctx.currentTime + i * 0.08);
             osc.stop(ctx.currentTime + i * 0.08 + 0.2);
+        });
+    }
+
+    combo() {
+        const ctx = this.ensure();
+        const notes = [659, 784, 988, 1318];
+        notes.forEach((freq, i) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = "sine";
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.05 + 0.16);
+            osc.start(ctx.currentTime + i * 0.05);
+            osc.stop(ctx.currentTime + i * 0.05 + 0.16);
         });
     }
 
@@ -106,15 +143,21 @@ class MicroCellsGame {
     private phase = Phase.SELECT;
     private selected: Position | null = null;
     private score = 0;
+    private combo = 0;
+    private moveCount = 0;
     private best: number;
     private nextColors: CellColor[] = [];
-    private pendingMoveTarget: Position | null = null;
+    private pendingRemove: Set<string> | null = null;
+    private pendingLineScore = 0;
+    private pendingLineCount = 0;
 
     // DOM refs
     private scoreEl: HTMLElement;
     private bestEl: HTMLElement;
     private messageEl: HTMLElement;
     private nextDots: HTMLElement[];
+    private difficultyEl: HTMLElement;
+    private comboEl: HTMLElement;
     private overlay: HTMLElement;
     private finalScoreEl: HTMLElement;
 
@@ -128,11 +171,13 @@ class MicroCellsGame {
         this.messageEl = document.getElementById("message")!;
         this.overlay = document.getElementById("overlay")!;
         this.finalScoreEl = document.getElementById("final-score")!;
-        this.nextDots = [
-            document.getElementById("next0")!,
-            document.getElementById("next1")!,
-            document.getElementById("next2")!,
-        ];
+        this.nextDots = [];
+        for (let i = 0; i < PREVIEW_SIZE; i++) {
+            const dot = document.getElementById(`next${i}`);
+            if (dot) this.nextDots.push(dot);
+        }
+        this.difficultyEl = document.getElementById("difficulty")!;
+        this.comboEl = document.getElementById("combo")!;
 
         this.best = parseInt(localStorage.getItem("microcells_best") || "0", 10);
         this.bestEl.textContent = String(this.best);
@@ -158,27 +203,38 @@ class MicroCellsGame {
     private newGame() {
         this.grid = createEmptyGrid();
         this.score = 0;
+        this.combo = 0;
+        this.moveCount = 0;
         this.selected = null;
+        this.pendingRemove = null;
+        this.pendingLineScore = 0;
+        this.pendingLineCount = 0;
         this.phase = Phase.SELECT;
         this.overlay.classList.remove("visible");
+        this.renderer.setSelected(null);
 
-        this.nextColors = generateNextColors();
-        // Initial spawn of 5 cells
-        const initialColors = Array.from({ length: 5 }, () => Math.floor(Math.random() * 7));
-        spawnCells(this.grid, initialColors);
+        this.nextColors = generateNextColors(PREVIEW_SIZE, this.moveCount);
+        spawnCells(this.grid, generateNextColors(6, this.moveCount));
 
         this.updateUI();
+        this.setMessage("Select a cell to move");
     }
 
     private updateUI() {
         this.scoreEl.textContent = String(this.score);
         this.bestEl.textContent = String(this.best);
+        this.comboEl.textContent = this.combo > 1 ? `x${this.combo}` : "-";
+
+        const occupied = countOccupied(this.grid);
+        const spawnCount = getSpawnCount(this.moveCount, occupied / VALID_CELL_COUNT);
+        this.difficultyEl.textContent = `${spawnCount} / turn`;
 
         // Next preview dots
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < this.nextDots.length; i++) {
             const color = this.nextColors[i];
             this.nextDots[i].style.background =
                 color !== undefined ? this.renderer.getThemeColor(color) : "transparent";
+            this.nextDots[i].style.opacity = i < spawnCount ? "1" : "0.42";
         }
     }
 
@@ -228,7 +284,6 @@ class MicroCellsGame {
 
             // Execute move
             this.phase = Phase.MOVE_ANIM;
-            this.pendingMoveTarget = pos;
             const movingColor = this.grid[this.selected.row][this.selected.col].color;
 
             // Clear source
@@ -241,6 +296,7 @@ class MicroCellsGame {
 
             this.renderer.setSelected(null);
             this.renderer.startPathAnimation(fullPath, movingColor);
+            this.sfx.move();
             this.selected = null;
             this.setMessage("");
         }
@@ -250,31 +306,53 @@ class MicroCellsGame {
 
     private onAnimComplete() {
         if (this.phase === Phase.MOVE_ANIM) {
+            this.moveCount++;
             // Check for lines
-            const { toRemove, score } = checkLines(this.grid);
+            const { toRemove, score, lineCount } = checkLines(this.grid);
             if (toRemove.size > 0) {
-                this.score += score;
+                this.combo++;
+                const comboBonus = this.combo > 1 ? Math.floor(score * 0.2 * (this.combo - 1)) : 0;
+                const turnScore = score + comboBonus;
+                this.score += turnScore;
                 if (this.score > this.best) {
                     this.best = this.score;
                     localStorage.setItem("microcells_best", String(this.best));
                 }
-                this.sfx.score();
+                this.pendingRemove = toRemove;
+                this.pendingLineScore = turnScore;
+                this.pendingLineCount = lineCount;
                 this.phase = Phase.REMOVE_ANIM;
                 this.renderer.startRemoveAnimation(toRemove);
-                this.setMessage(`+${score} points!`);
+                if (this.combo > 1) {
+                    this.sfx.combo();
+                    this.setMessage(`Combo x${this.combo}! +${turnScore}`);
+                } else {
+                    this.sfx.score();
+                    this.setMessage(`+${turnScore} points`);
+                }
                 this.updateUI();
                 return;
             }
 
+            this.combo = 0;
             // No score — spawn new cells
             this.spawnPhase();
             return;
         }
 
         if (this.phase === Phase.REMOVE_ANIM) {
-            // Actually remove cells from grid
-            const { toRemove } = checkLines(this.grid);
-            removeMatches(this.grid, toRemove);
+            if (this.pendingRemove) {
+                removeMatches(this.grid, this.pendingRemove);
+            }
+            this.pendingRemove = null;
+            this.pendingLineScore = 0;
+            this.pendingLineCount = 0;
+
+            if (!hasAnyMove(this.grid) || isBoardFull(this.grid)) {
+                this.gameOver();
+                return;
+            }
+
             this.phase = Phase.SELECT;
             this.setMessage("Select a cell to move");
             this.updateUI();
@@ -285,21 +363,31 @@ class MicroCellsGame {
             // Check if spawned cells create lines
             const { toRemove, score } = checkLines(this.grid);
             if (toRemove.size > 0) {
-                this.score += score;
+                this.combo++;
+                const comboBonus = this.combo > 1 ? Math.floor(score * 0.2 * (this.combo - 1)) : 0;
+                const turnScore = score + comboBonus;
+                this.score += turnScore;
                 if (this.score > this.best) {
                     this.best = this.score;
                     localStorage.setItem("microcells_best", String(this.best));
                 }
-                this.sfx.score();
+                this.pendingRemove = toRemove;
                 this.phase = Phase.REMOVE_ANIM;
                 this.renderer.startRemoveAnimation(toRemove);
-                this.setMessage(`+${score} points!`);
+                if (this.combo > 1) {
+                    this.sfx.combo();
+                    this.setMessage(`Chain combo x${this.combo}! +${turnScore}`);
+                } else {
+                    this.sfx.score();
+                    this.setMessage(`+${turnScore} points`);
+                }
                 this.updateUI();
                 return;
             }
 
+            this.combo = 0;
             // Check game over
-            if (isBoardFull(this.grid)) {
+            if (isBoardFull(this.grid) || !hasAnyMove(this.grid)) {
                 this.gameOver();
                 return;
             }
@@ -312,13 +400,18 @@ class MicroCellsGame {
     }
 
     private spawnPhase() {
-        const placed = spawnCells(this.grid, this.nextColors);
-        this.nextColors = generateNextColors();
+        const occupiedRatio = countOccupied(this.grid) / VALID_CELL_COUNT;
+        const spawnCount = getSpawnCount(this.moveCount, occupiedRatio);
+        const spawnColors = this.nextColors.slice(0, spawnCount);
+
+        const placed = spawnCells(this.grid, spawnColors);
+        this.nextColors = generateNextColors(PREVIEW_SIZE, this.moveCount);
         this.updateUI();
 
         if (placed.length > 0) {
             this.phase = Phase.SPAWN_ANIM;
             this.renderer.startSpawnAnimation(placed);
+            this.setMessage(`Spawned ${placed.length} cells`);
         } else {
             // Board is full
             this.gameOver();

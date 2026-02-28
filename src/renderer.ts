@@ -1,6 +1,12 @@
-import { GRID_SIZE, type CellColor, type Grid, type Position } from "./game";
-
-// ─── Color palette (biological / neon vibes) ────────────────────────────────
+import {
+    EMPTY_COLOR,
+    getAllValidPositions,
+    HEX_RADIUS,
+    JOKER_COLOR,
+    type CellColor,
+    type Grid,
+    type Position,
+} from "./game";
 
 interface CellTheme {
     core: string;
@@ -9,69 +15,151 @@ interface CellTheme {
     nucleus: string;
 }
 
+const SQRT3 = Math.sqrt(3);
+const BOARD_PADDING = 30;
+
 const CELL_THEMES: CellTheme[] = [
-    { core: "#ff6b8a", glow: "rgba(255,107,138,0.35)", membrane: "#ff8da6", nucleus: "#cc3a5c" }, // red
-    { core: "#6be0ff", glow: "rgba(107,224,255,0.35)", membrane: "#8de8ff", nucleus: "#2ab0d4" }, // cyan
-    { core: "#7fefce", glow: "rgba(127,239,206,0.35)", membrane: "#a0f5dc", nucleus: "#3cc49e" }, // green
-    { core: "#ffbe5c", glow: "rgba(255,190,92,0.35)", membrane: "#ffce80", nucleus: "#d4912a" }, // orange
-    { core: "#c785ff", glow: "rgba(199,133,255,0.35)", membrane: "#d6a3ff", nucleus: "#9640e0" }, // purple
-    { core: "#ff85c0", glow: "rgba(255,133,192,0.35)", membrane: "#ffa3d0", nucleus: "#d44a90" }, // pink
-    { core: "#85c0ff", glow: "rgba(133,192,255,0.35)", membrane: "#a3d0ff", nucleus: "#4a7fc4" }, // blue
+    { core: "#ff6b8a", glow: "rgba(255,107,138,0.38)", membrane: "#ff96ad", nucleus: "#cc3a5c" },
+    { core: "#6be0ff", glow: "rgba(107,224,255,0.38)", membrane: "#91ebff", nucleus: "#2ab0d4" },
+    { core: "#7fefce", glow: "rgba(127,239,206,0.38)", membrane: "#a9f7df", nucleus: "#38bf98" },
+    { core: "#ffbe5c", glow: "rgba(255,190,92,0.38)", membrane: "#ffd38b", nucleus: "#d18f30" },
+    { core: "#c785ff", glow: "rgba(199,133,255,0.38)", membrane: "#dcb0ff", nucleus: "#9640e0" },
+    { core: "#ff85c0", glow: "rgba(255,133,192,0.38)", membrane: "#ffb2d9", nucleus: "#d44a90" },
+    { core: "#85c0ff", glow: "rgba(133,192,255,0.38)", membrane: "#aed8ff", nucleus: "#4a7fc4" },
 ];
 
-// ─── Render constants ────────────────────────────────────────────────────────
-
-const BOARD_PADDING = 16;
-const CELL_GAP = 3;
+const JOKER_THEME: CellTheme = {
+    core: "#ffd86b",
+    glow: "rgba(255,216,107,0.45)",
+    membrane: "#ffe59e",
+    nucleus: "#d6a72f",
+};
 
 export class Renderer {
     private canvas: HTMLCanvasElement;
     private ctx: CanvasRenderingContext2D;
-    private cellSize = 0;
-    private boardOffset = 0;
+    private validPositions: Position[];
+    private centers = new Map<string, { x: number; y: number }>();
+    private hexRadius = 20;
+    private boardSize = 0;
     private animFrame = 0;
 
-    // Animations
     private selectedPos: Position | null = null;
     private selectedBounce = 0;
     private pathAnim: { path: Position[]; progress: number; color: CellColor } | null = null;
     private spawnAnim: { positions: Position[]; progress: number } | null = null;
     private removeAnim: { positions: Set<string>; progress: number } | null = null;
 
-    // Callbacks
     onAnimationComplete: (() => void) | null = null;
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
         this.ctx = canvas.getContext("2d")!;
+        this.validPositions = getAllValidPositions();
         this.resize();
+    }
+
+    private posKey(pos: Position): string {
+        return `${pos.row},${pos.col}`;
+    }
+
+    private axial(pos: Position): { q: number; r: number } {
+        return { q: pos.col - HEX_RADIUS, r: pos.row - HEX_RADIUS };
+    }
+
+    private unitCenter(pos: Position): { x: number; y: number } {
+        const { q, r } = this.axial(pos);
+        return {
+            x: SQRT3 * (q + r / 2),
+            y: 1.5 * r,
+        };
     }
 
     resize() {
         const dpr = window.devicePixelRatio || 1;
-        const maxSize = Math.min(window.innerWidth - 40, window.innerHeight - 200, 600);
+        const maxSize = Math.min(window.innerWidth - 32, window.innerHeight - 190, 760);
+        this.boardSize = maxSize;
+
         this.canvas.style.width = `${maxSize}px`;
         this.canvas.style.height = `${maxSize}px`;
         this.canvas.width = maxSize * dpr;
         this.canvas.height = maxSize * dpr;
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        const boardArea = maxSize - BOARD_PADDING * 2;
-        this.cellSize = (boardArea - CELL_GAP * (GRID_SIZE - 1)) / GRID_SIZE;
-        this.boardOffset = BOARD_PADDING;
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const pos of this.validPositions) {
+            const p = this.unitCenter(pos);
+            minX = Math.min(minX, p.x);
+            maxX = Math.max(maxX, p.x);
+            minY = Math.min(minY, p.y);
+            maxY = Math.max(maxY, p.y);
+        }
+
+        const available = maxSize - BOARD_PADDING * 2;
+        this.hexRadius = Math.min(available / (maxX - minX + 2.2), available / (maxY - minY + 2.2));
+
+        const boardCenterX = maxSize / 2;
+        const boardCenterY = maxSize / 2;
+        const unitMidX = (minX + maxX) / 2;
+        const unitMidY = (minY + maxY) / 2;
+
+        this.centers.clear();
+        for (const pos of this.validPositions) {
+            const u = this.unitCenter(pos);
+            const x = boardCenterX + (u.x - unitMidX) * this.hexRadius;
+            const y = boardCenterY + (u.y - unitMidY) * this.hexRadius;
+            this.centers.set(this.posKey(pos), { x, y });
+        }
     }
 
     getCellFromPixel(x: number, y: number): Position | null {
-        const localX = x - this.boardOffset;
-        const localY = y - this.boardOffset;
-        const step = this.cellSize + CELL_GAP;
-        const col = Math.floor(localX / step);
-        const row = Math.floor(localY / step);
-        if (row < 0 || row >= GRID_SIZE || col < 0 || col >= GRID_SIZE) return null;
-        // Check we're inside the cell, not the gap
-        if (localX - col * step > this.cellSize) return null;
-        if (localY - row * step > this.cellSize) return null;
-        return { row, col };
+        for (const pos of this.validPositions) {
+            const center = this.centers.get(this.posKey(pos));
+            if (!center) continue;
+            if (this.pointInHex(x, y, center.x, center.y, this.hexRadius * 0.96)) {
+                return pos;
+            }
+        }
+        return null;
+    }
+
+    private pointInHex(px: number, py: number, cx: number, cy: number, radius: number): boolean {
+        const points = this.hexPoints(cx, cy, radius);
+        let inside = false;
+        for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+            const xi = points[i].x;
+            const yi = points[i].y;
+            const xj = points[j].x;
+            const yj = points[j].y;
+            const intersect = yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi;
+            if (intersect) inside = !inside;
+        }
+        return inside;
+    }
+
+    private hexPoints(cx: number, cy: number, radius: number): Array<{ x: number; y: number }> {
+        const pts: Array<{ x: number; y: number }> = [];
+        for (let i = 0; i < 6; i++) {
+            const angle = ((60 * i - 30) * Math.PI) / 180;
+            pts.push({
+                x: cx + radius * Math.cos(angle),
+                y: cy + radius * Math.sin(angle),
+            });
+        }
+        return pts;
+    }
+
+    private drawHex(cx: number, cy: number, radius: number) {
+        const pts = this.hexPoints(cx, cy, radius);
+        this.ctx.beginPath();
+        this.ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+            this.ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        this.ctx.closePath();
     }
 
     setSelected(pos: Position | null) {
@@ -92,243 +180,255 @@ export class Renderer {
     }
 
     isAnimating(): boolean {
-        return this.pathAnim !== null || this.spawnAnim !== null || this.removeAnim !== null;
+        return !!(this.pathAnim || this.spawnAnim || this.removeAnim);
     }
-
-    // ─── Main draw loop ─────────────────────────────────────────────────────
 
     draw(grid: Grid) {
         this.animFrame++;
         const ctx = this.ctx;
-        const size = parseFloat(this.canvas.style.width);
 
-        // Clear
-        ctx.clearRect(0, 0, size, size);
+        const bg = ctx.createRadialGradient(
+            this.boardSize * 0.5,
+            this.boardSize * 0.45,
+            20,
+            this.boardSize * 0.5,
+            this.boardSize * 0.5,
+            this.boardSize * 0.7,
+        );
+        bg.addColorStop(0, "#132235");
+        bg.addColorStop(0.65, "#0f1728");
+        bg.addColorStop(1, "#090d18");
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, this.boardSize, this.boardSize);
 
-        // Board background
-        ctx.fillStyle = "#111828";
-        ctx.beginPath();
-        ctx.roundRect(4, 4, size - 8, size - 8, 10);
-        ctx.fill();
+        const wave = Math.sin(this.animFrame * 0.015) * 0.05 + 1;
+        for (const pos of this.validPositions) {
+            const center = this.centers.get(this.posKey(pos));
+            if (!center) continue;
 
-        // Draw cells
-        const step = this.cellSize + CELL_GAP;
-        for (let r = 0; r < GRID_SIZE; r++) {
-            for (let c = 0; c < GRID_SIZE; c++) {
-                const x = this.boardOffset + c * step;
-                const y = this.boardOffset + r * step;
-                const s = this.cellSize;
+            this.drawHex(center.x, center.y, this.hexRadius * 0.92);
+            ctx.fillStyle = "rgba(13, 24, 41, 0.86)";
+            ctx.fill();
+            ctx.strokeStyle = "rgba(145, 176, 220, 0.09)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
 
-                // Cell background (petri dish well)
-                ctx.fillStyle = "#0d1320";
-                ctx.beginPath();
-                ctx.roundRect(x, y, s, s, 4);
-                ctx.fill();
+            this.drawHex(center.x, center.y, this.hexRadius * 0.5 * wave);
+            ctx.strokeStyle = "rgba(95, 130, 180, 0.06)";
+            ctx.lineWidth = 0.7;
+            ctx.stroke();
 
-                // Subtle border
-                ctx.strokeStyle = "rgba(255,255,255,0.04)";
-                ctx.lineWidth = 0.5;
-                ctx.stroke();
+            const color = grid[pos.row][pos.col].color;
+            if (color === EMPTY_COLOR) continue;
 
-                const key = `${r},${c}`;
-                const color = grid[r][c].color;
-
-                // Skip drawing cell in remove animation (fading)
-                if (this.removeAnim && this.removeAnim.positions.has(key)) {
-                    const alpha = 1 - this.removeAnim.progress;
-                    if (color >= 0) {
-                        this.drawMicroCell(x, y, s, color, alpha, 1 + this.removeAnim.progress * 0.3);
-                    }
-                    continue;
-                }
-
-                // Skip drawing target during path animation (cell is moving)
-                if (this.pathAnim) {
-                    // Don't draw the path endpoint's cell yet
-                    const last = this.pathAnim.path[this.pathAnim.path.length - 1];
-                    if (last && r === last.row && c === last.col) continue;
-                }
-
-                // Spawn animation
-                if (this.spawnAnim && this.spawnAnim.positions.some((p) => p.row === r && p.col === c)) {
-                    if (color >= 0) {
-                        const scale = this.spawnAnim.progress;
-                        this.drawMicroCell(x, y, s, color, this.spawnAnim.progress, scale);
-                    }
-                    continue;
-                }
-
-                // Normal cell
-                if (color >= 0) {
-                    const isSelected = this.selectedPos?.row === r && this.selectedPos?.col === c;
-                    const bounce = isSelected ? Math.sin(this.selectedBounce) * 0.08 : 0;
-                    this.drawMicroCell(x, y, s, color, 1, 1 + bounce, isSelected);
-                }
+            const key = this.posKey(pos);
+            if (this.removeAnim && this.removeAnim.positions.has(key)) {
+                this.drawMicroCell(
+                    center.x,
+                    center.y,
+                    color,
+                    1 - this.removeAnim.progress,
+                    1 + this.removeAnim.progress * 0.4,
+                );
+                continue;
             }
+
+            if (this.pathAnim) {
+                const last = this.pathAnim.path[this.pathAnim.path.length - 1];
+                if (last && last.row === pos.row && last.col === pos.col) continue;
+            }
+
+            if (this.spawnAnim && this.spawnAnim.positions.some((p) => p.row === pos.row && p.col === pos.col)) {
+                this.drawMicroCell(center.x, center.y, color, this.spawnAnim.progress, this.spawnAnim.progress);
+                continue;
+            }
+
+            const selected = this.selectedPos?.row === pos.row && this.selectedPos?.col === pos.col;
+            const pulse = selected ? Math.sin(this.selectedBounce) * 0.08 : 0;
+            this.drawMicroCell(center.x, center.y, color, 1, 1 + pulse, selected);
         }
 
-        // Draw moving cell on path
-        if (this.pathAnim) {
-            const { path, progress, color } = this.pathAnim;
-            if (path.length > 0) {
-                const totalSteps = path.length;
-                const exactStep = progress * totalSteps;
-                const stepIdx = Math.min(Math.floor(exactStep), totalSteps - 1);
-                const stepFrac = exactStep - stepIdx;
-
-                let currentPos: Position;
-                if (stepIdx < totalSteps - 1) {
-                    const cur = path[stepIdx];
-                    const next = path[stepIdx + 1];
-                    currentPos = {
-                        row: cur.row + (next.row - cur.row) * stepFrac,
-                        col: cur.col + (next.col - cur.col) * stepFrac,
-                    };
-                } else {
-                    currentPos = path[totalSteps - 1];
-                }
-
-                const x = this.boardOffset + currentPos.col * step;
-                const y = this.boardOffset + currentPos.row * step;
-                this.drawMicroCell(x, y, this.cellSize, color, 1, 1, true);
-            }
+        if (this.pathAnim && this.pathAnim.path.length > 0) {
+            const p = this.interpolatedPathPosition(this.pathAnim.path, this.pathAnim.progress);
+            this.drawMicroCell(p.x, p.y, this.pathAnim.color, 1, 1, true);
+            this.drawPathTrail(this.pathAnim.path, this.pathAnim.progress);
         }
 
-        // Update animations
         this.updateAnimations();
-        this.selectedBounce += 0.12;
+        this.selectedBounce += 0.14;
+    }
+
+    private interpolatedPathPosition(path: Position[], progress: number): { x: number; y: number } {
+        if (path.length === 1) {
+            return this.centers.get(this.posKey(path[0]))!;
+        }
+        const totalSegments = path.length - 1;
+        const exact = progress * totalSegments;
+        const idx = Math.min(Math.floor(exact), totalSegments - 1);
+        const t = Math.max(0, Math.min(1, exact - idx));
+
+        const a = this.centers.get(this.posKey(path[idx]))!;
+        const b = this.centers.get(this.posKey(path[idx + 1]))!;
+        return {
+            x: a.x + (b.x - a.x) * t,
+            y: a.y + (b.y - a.y) * t,
+        };
+    }
+
+    private drawPathTrail(path: Position[], progress: number) {
+        if (path.length < 2) return;
+        const ctx = this.ctx;
+        const totalSegments = path.length - 1;
+        const exact = progress * totalSegments;
+        const limit = Math.max(1, Math.ceil(exact));
+
+        ctx.beginPath();
+        const start = this.centers.get(this.posKey(path[0]))!;
+        ctx.moveTo(start.x, start.y);
+        for (let i = 1; i <= limit && i < path.length; i++) {
+            const p = this.centers.get(this.posKey(path[i]))!;
+            ctx.lineTo(p.x, p.y);
+        }
+        ctx.strokeStyle = "rgba(145, 220, 255, 0.35)";
+        ctx.lineWidth = 2.2;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = "rgba(145, 220, 255, 0.6)";
+        ctx.stroke();
+        ctx.shadowBlur = 0;
     }
 
     private updateAnimations() {
-        let animDone = false;
+        let finished = false;
 
         if (this.pathAnim) {
-            const speed = Math.min(0.08, 0.5 / this.pathAnim.path.length);
-            this.pathAnim.progress += speed;
+            const segments = Math.max(1, this.pathAnim.path.length - 1);
+            this.pathAnim.progress += Math.min(0.11, 0.68 / segments);
             if (this.pathAnim.progress >= 1) {
                 this.pathAnim = null;
-                animDone = true;
+                finished = true;
             }
         }
 
         if (this.spawnAnim) {
-            this.spawnAnim.progress += 0.06;
+            this.spawnAnim.progress += 0.075;
             if (this.spawnAnim.progress >= 1) {
                 this.spawnAnim = null;
-                animDone = true;
+                finished = true;
             }
         }
 
         if (this.removeAnim) {
-            this.removeAnim.progress += 0.05;
+            this.removeAnim.progress += 0.068;
             if (this.removeAnim.progress >= 1) {
                 this.removeAnim = null;
-                animDone = true;
+                finished = true;
             }
         }
 
-        if (animDone && !this.isAnimating() && this.onAnimationComplete) {
+        if (finished && !this.isAnimating() && this.onAnimationComplete) {
             this.onAnimationComplete();
         }
     }
 
-    // ─── Draw a single micro-organism cell ───────────────────────────────────
-
-    private drawMicroCell(
-        x: number,
-        y: number,
-        size: number,
-        colorIdx: CellColor,
-        alpha: number,
-        scale: number,
-        selected = false,
-    ) {
+    private drawMicroCell(cx: number, cy: number, color: CellColor, alpha: number, scale: number, selected = false) {
         const ctx = this.ctx;
-        const theme = CELL_THEMES[colorIdx % CELL_THEMES.length];
-
-        const cx = x + size / 2;
-        const cy = y + size / 2;
-        const baseR = size * 0.4;
-        const r = baseR * scale;
+        const radius = this.hexRadius * 0.52 * scale;
+        const theme = color === JOKER_COLOR ? JOKER_THEME : CELL_THEMES[color % CELL_THEMES.length];
 
         ctx.save();
         ctx.globalAlpha = alpha;
 
-        // Outer glow
-        const glowR = r * 1.6;
-        const glowGrad = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, glowR);
-        glowGrad.addColorStop(0, theme.glow);
-        glowGrad.addColorStop(1, "transparent");
-        ctx.fillStyle = glowGrad;
+        const glow = ctx.createRadialGradient(cx, cy, radius * 0.25, cx, cy, radius * 1.8);
+        glow.addColorStop(0, theme.glow);
+        glow.addColorStop(1, "transparent");
+        ctx.fillStyle = glow;
         ctx.beginPath();
-        ctx.arc(cx, cy, glowR, 0, Math.PI * 2);
+        ctx.arc(cx, cy, radius * 1.8, 0, Math.PI * 2);
         ctx.fill();
 
-        // Selection ring
         if (selected) {
             ctx.strokeStyle = theme.core;
             ctx.lineWidth = 2;
             ctx.shadowColor = theme.core;
-            ctx.shadowBlur = 12;
+            ctx.shadowBlur = 14;
             ctx.beginPath();
-            ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
+            ctx.arc(cx, cy, radius + 5, 0, Math.PI * 2);
             ctx.stroke();
             ctx.shadowBlur = 0;
         }
 
-        // Membrane (outer circle)
-        const memGrad = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r);
-        memGrad.addColorStop(0, theme.membrane);
-        memGrad.addColorStop(0.7, theme.core);
-        memGrad.addColorStop(1, theme.nucleus);
-        ctx.fillStyle = memGrad;
+        const membrane = ctx.createRadialGradient(cx - radius * 0.25, cy - radius * 0.25, radius * 0.2, cx, cy, radius);
+        membrane.addColorStop(0, theme.membrane);
+        membrane.addColorStop(0.72, theme.core);
+        membrane.addColorStop(1, theme.nucleus);
+        ctx.fillStyle = membrane;
         ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // Inner organelles — small circles for texture
-        ctx.globalAlpha = alpha * 0.3;
-        const time = this.animFrame * 0.02;
+        const t = this.animFrame * 0.022;
+        ctx.globalAlpha = alpha * 0.35;
         for (let i = 0; i < 3; i++) {
-            const angle = time + (i * Math.PI * 2) / 3;
-            const dist = r * 0.35;
-            const ox = cx + Math.cos(angle) * dist;
-            const oy = cy + Math.sin(angle) * dist;
-            const oR = r * 0.15;
+            const angle = t + (i * Math.PI * 2) / 3;
+            const ox = cx + Math.cos(angle) * radius * 0.35;
+            const oy = cy + Math.sin(angle) * radius * 0.35;
             ctx.fillStyle = theme.nucleus;
             ctx.beginPath();
-            ctx.arc(ox, oy, oR, 0, Math.PI * 2);
+            ctx.arc(ox, oy, radius * 0.14, 0, Math.PI * 2);
             ctx.fill();
         }
 
-        // Nucleus
-        ctx.globalAlpha = alpha * 0.9;
-        const nucGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 0.3);
-        nucGrad.addColorStop(0, "rgba(255,255,255,0.5)");
-        nucGrad.addColorStop(1, "transparent");
-        ctx.fillStyle = nucGrad;
+        ctx.globalAlpha = alpha * 0.78;
+        const highlight = ctx.createRadialGradient(cx - radius * 0.25, cy - radius * 0.26, 0, cx, cy, radius * 0.9);
+        highlight.addColorStop(0, "rgba(255,255,255,0.66)");
+        highlight.addColorStop(1, "transparent");
+        ctx.fillStyle = highlight;
         ctx.beginPath();
-        ctx.arc(cx, cy, r * 0.3, 0, Math.PI * 2);
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // Specular highlight
-        ctx.globalAlpha = alpha * 0.6;
-        const specX = cx - r * 0.25;
-        const specY = cy - r * 0.25;
-        const specGrad = ctx.createRadialGradient(specX, specY, 0, specX, specY, r * 0.4);
-        specGrad.addColorStop(0, "rgba(255,255,255,0.7)");
-        specGrad.addColorStop(1, "transparent");
-        ctx.fillStyle = specGrad;
-        ctx.beginPath();
-        ctx.arc(specX, specY, r * 0.4, 0, Math.PI * 2);
-        ctx.fill();
+        if (color === JOKER_COLOR) {
+            this.drawJokerSymbol(cx, cy, radius * 0.52, alpha);
+        }
 
         ctx.restore();
     }
 
-    // ─── Utility ─────────────────────────────────────────────────────────────
+    private drawJokerSymbol(cx: number, cy: number, r: number, alpha: number) {
+        const ctx = this.ctx;
+        const rot = this.animFrame * 0.015;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.rotate(rot);
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+            const a = (i * Math.PI) / 3;
+            const x = Math.cos(a) * r;
+            const y = Math.sin(a) * r;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+
+        ctx.rotate(-rot * 1.7);
+        ctx.strokeStyle = "rgba(255,235,170,0.95)";
+        ctx.beginPath();
+        ctx.moveTo(0, -r * 0.95);
+        ctx.lineTo(0, r * 0.95);
+        ctx.moveTo(-r * 0.95, 0);
+        ctx.lineTo(r * 0.95, 0);
+        ctx.stroke();
+        ctx.restore();
+    }
 
     getThemeColor(colorIdx: CellColor): string {
+        if (colorIdx === JOKER_COLOR) return JOKER_THEME.core;
+        if (colorIdx < 0) return "transparent";
         return CELL_THEMES[colorIdx % CELL_THEMES.length].core;
     }
 
