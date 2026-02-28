@@ -17,33 +17,57 @@ import {
 } from "./game";
 import { Renderer } from "./renderer";
 
-// ─── Sound FX (tiny synthesized sounds) ──────────────────────────────────────
+// ─── Sound FX + Generative Ambient Music ─────────────────────────────────────
 
 class SFX {
     private actx: AudioContext | null = null;
-    private musicTimer: number | null = null;
-    private musicStep = 0;
-    private songIndex = 0;
     private sfxEnabled = true;
     private musicEnabled = true;
 
-    private readonly musicTickMs = 420;
+    /* ── ambient music engine state ── */
+    private musicRunning = false;
+    private musicTimer: number | null = null;
+    private reverbSend: GainNode | null = null;
+    private reverbReturn: ConvolverNode | null = null;
+    private masterGain: GainNode | null = null;
+    private harmStep = 0;
+    private melodyPos = 0;
+    private melodyTimer: number | null = null;
+    private activeNodes: { osc: OscillatorNode; stop: number }[] = [];
 
-    private readonly songs = [
-        {
-            name: "Gymnopedie Mood",
-            melody: [
-                66, -1, 69, -1, 71, -1, 69, -1, 66, -1, 64, -1, 62, -1, 64, -1, 66, -1, 69, -1, 71, -1, 73, -1, 71, -1,
-                69, -1, 66, -1, 64, -1, 62, -1, 64, -1, 66, -1, 69, -1, 71, -1, 69, -1, 66, -1, 64, -1, 62, -1, 61, -1,
-                62, -1, 64, -1, 66, -1, 64, -1, 62, -1, 59, -1,
-            ],
-            bass: [
-                42, -1, -1, -1, 49, -1, -1, -1, 45, -1, -1, -1, 52, -1, -1, -1, 42, -1, -1, -1, 49, -1, -1, -1, 40, -1,
-                -1, -1, 47, -1, -1, -1,
-            ],
-            chordRoots: [54, 61, 57, 64, 54, 61, 52, 59],
-        },
-    ] as const;
+    /*
+     * Harmonic progression — MIDI roots.
+     * Slow, dreamy modal drift: Dmaj9 → Bm7 → Gmaj7 → Em9 → F#m7 → Amaj7 → Dmaj9
+     * Each chord lasts ~10 seconds.
+     */
+    private readonly chords: { root: number; voicing: number[] }[] = [
+        { root: 50, voicing: [50, 57, 64, 66, 69] }, // Dmaj9      D F# A B  C#  (add9)
+        { root: 47, voicing: [47, 54, 59, 62, 66] }, // Bm7        B F# A  D  F#
+        { root: 55, voicing: [55, 59, 62, 66, 71] }, // Gmaj7      G B  D  F# B
+        { root: 52, voicing: [52, 56, 59, 64, 67] }, // Em9        E G# B  E  G
+        { root: 54, voicing: [54, 57, 61, 64, 69] }, // F#m7       F# A C# E  A
+        { root: 57, voicing: [57, 61, 64, 66, 69] }, // Amaj7      A  C# E F# A
+        { root: 50, voicing: [50, 54, 57, 61, 66] }, // Dsus→maj   D  F# A C# F#
+        { root: 55, voicing: [55, 59, 62, 67, 71] }, // G6/9       G  B  D  G  B
+    ];
+
+    /*
+     * Melody fragments — short motifs that drift over the chords.
+     * Written as semitone offsets from current chord root.
+     * -1 = rest (silence). Sparse and unpredictable.
+     */
+    private readonly melodyFragments: number[][] = [
+        [12, -1, -1, 16, -1, 14, -1, -1, -1, 12, -1, -1, 9, -1, -1, -1],
+        [-1, -1, 7, -1, -1, 12, -1, 14, -1, -1, -1, -1, 16, -1, -1, -1],
+        [24, -1, -1, -1, 21, -1, -1, -1, -1, 19, -1, -1, -1, -1, -1, -1],
+        [-1, 9, -1, -1, -1, -1, 7, -1, -1, -1, 12, -1, -1, -1, -1, -1],
+        [-1, -1, -1, 14, -1, -1, -1, -1, 12, -1, -1, 9, -1, -1, 7, -1],
+        [-1, -1, -1, -1, -1, 19, -1, -1, -1, -1, 16, -1, -1, -1, -1, 14],
+        [7, -1, -1, -1, -1, -1, -1, -1, 9, -1, -1, -1, -1, -1, -1, -1],
+        [-1, -1, 12, -1, -1, -1, -1, -1, -1, -1, -1, 7, -1, -1, -1, -1],
+    ];
+
+    private readonly baseMidi = 50; // D3
 
     private ensure() {
         if (!this.actx) this.actx = new AudioContext();
@@ -64,10 +88,7 @@ class SFX {
     setMusicEnabled(enabled: boolean) {
         this.musicEnabled = enabled;
         if (!enabled) {
-            if (this.musicTimer !== null) {
-                window.clearInterval(this.musicTimer);
-                this.musicTimer = null;
-            }
+            this.stopMusic();
             return;
         }
         this.startMusic();
@@ -81,21 +102,225 @@ class SFX {
         return this.musicEnabled;
     }
 
+    /* ═══════════════════════════════════════════════════════════════════════
+     *  AMBIENT MUSIC ENGINE
+     * ═══════════════════════════════════════════════════════════════════════ */
+
     startMusic() {
-        if (!this.musicEnabled || this.musicTimer !== null) return;
-        this.musicStep = 0;
-        this.songIndex = 0;
-        this.musicTimer = window.setInterval(() => {
-            if (!this.musicEnabled) return;
-            this.playMusicStep();
-        }, this.musicTickMs);
+        if (!this.musicEnabled || this.musicRunning) return;
+        this.musicRunning = true;
+        const ctx = this.ensure();
+        const now = ctx.currentTime;
+
+        // ── master bus with gentle compression ──
+        this.masterGain = ctx.createGain();
+        this.masterGain.gain.setValueAtTime(0.0001, now);
+        this.masterGain.gain.exponentialRampToValueAtTime(1, now + 3);
+
+        const compressor = ctx.createDynamicsCompressor();
+        compressor.threshold.value = -20;
+        compressor.knee.value = 14;
+        compressor.ratio.value = 3;
+        compressor.attack.value = 0.1;
+        compressor.release.value = 0.3;
+        this.masterGain.connect(compressor).connect(ctx.destination);
+
+        // ── reverb ──
+        this.reverbReturn = this.buildReverb(ctx, 3.5, 2.2);
+        this.reverbReturn.connect(this.masterGain);
+        this.reverbSend = ctx.createGain();
+        this.reverbSend.gain.value = 0.6;
+        this.reverbSend.connect(this.reverbReturn);
+
+        // play first chord immediately
+        this.harmStep = 0;
+        this.melodyPos = 0;
+        this.playChord();
+
+        // advance chords every ~10s
+        this.musicTimer = window.setInterval(() => this.advanceHarmony(), 10000);
+
+        // melody tick every ~650ms (slow, sparse)
+        this.melodyTimer = window.setInterval(() => this.melodyTick(), 650);
     }
+
+    private stopMusic() {
+        this.musicRunning = false;
+        const ctx = this.actx;
+        if (!ctx) return;
+        const now = ctx.currentTime;
+
+        if (this.masterGain) {
+            this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+            this.masterGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.5);
+        }
+        if (this.musicTimer !== null) {
+            clearInterval(this.musicTimer);
+            this.musicTimer = null;
+        }
+        if (this.melodyTimer !== null) {
+            clearInterval(this.melodyTimer);
+            this.melodyTimer = null;
+        }
+
+        setTimeout(() => {
+            for (const n of this.activeNodes) {
+                try {
+                    n.osc.stop();
+                } catch {}
+            }
+            this.activeNodes = [];
+            this.reverbSend = null;
+            this.reverbReturn = null;
+            this.masterGain = null;
+        }, 2000);
+    }
+
+    /* ── reverb impulse ── */
+    private buildReverb(ctx: AudioContext, duration: number, decay: number): ConvolverNode {
+        const rate = ctx.sampleRate;
+        const length = Math.floor(rate * duration);
+        const impulse = ctx.createBuffer(2, length, rate);
+        for (let ch = 0; ch < 2; ch++) {
+            const data = impulse.getChannelData(ch);
+            for (let i = 0; i < length; i++) {
+                const t = i / rate;
+                const env = Math.exp(-t * decay) * (1 + 0.35 * Math.exp(-t * 22));
+                data[i] = (Math.random() * 2 - 1) * env;
+            }
+        }
+        const conv = ctx.createConvolver();
+        conv.buffer = impulse;
+        return conv;
+    }
+
+    /* ── play a sustained chord (voices fade in / out over ~9s) ── */
+    private playChord() {
+        if (!this.musicRunning || !this.actx) return;
+        const ctx = this.actx;
+        const now = ctx.currentTime;
+        const chord = this.chords[this.harmStep % this.chords.length];
+
+        for (let i = 0; i < chord.voicing.length; i++) {
+            const midi = chord.voicing[i];
+            const freq = this.midiToFreq(midi);
+            // two detuned oscillators per voice for warmth
+            for (const detune of [-4, 4]) {
+                const osc = ctx.createOscillator();
+                osc.type = "sine";
+                osc.frequency.value = freq;
+                osc.detune.value = detune + (Math.random() - 0.5) * 2;
+
+                const g = ctx.createGain();
+                const vol = 0.007 + (i === 0 ? 0.004 : 0); // root slightly louder
+                const attack = 1.8 + Math.random() * 1.2;
+                const hold = 5 + Math.random() * 2;
+                const release = hold + 2.5 + Math.random();
+                const total = release + 0.5;
+
+                g.gain.setValueAtTime(0.0001, now);
+                g.gain.exponentialRampToValueAtTime(vol, now + attack);
+                g.gain.setValueAtTime(vol, now + hold);
+                g.gain.exponentialRampToValueAtTime(0.0001, now + release);
+
+                osc.connect(g);
+                g.connect(this.masterGain!);
+                g.connect(this.reverbSend!);
+                osc.start(now);
+                osc.stop(now + total);
+                this.activeNodes.push({ osc, stop: now + total });
+            }
+        }
+
+        // cleanup old expired nodes
+        this.activeNodes = this.activeNodes.filter((n) => n.stop > now);
+    }
+
+    /* ── advance to next chord ── */
+    private advanceHarmony() {
+        if (!this.musicRunning) return;
+        this.harmStep = (this.harmStep + 1) % this.chords.length;
+        this.playChord();
+    }
+
+    /* ── melody: play one note from the current fragment ── */
+    private melodyTick() {
+        if (!this.musicRunning || !this.actx) return;
+        const ctx = this.actx;
+        if (ctx.state !== "running") return;
+
+        const fragIdx = this.harmStep % this.melodyFragments.length;
+        const frag = this.melodyFragments[fragIdx];
+        const step = this.melodyPos % frag.length;
+        this.melodyPos++;
+
+        const interval = frag[step];
+        if (interval < 0) return; // rest
+
+        const chord = this.chords[this.harmStep % this.chords.length];
+        const midi = chord.root + interval;
+        const freq = this.midiToFreq(midi);
+        const now = ctx.currentTime;
+
+        // soft bell-like tone
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+
+        // gentle vibrato via second oscillator
+        const vib = ctx.createOscillator();
+        vib.type = "sine";
+        vib.frequency.value = 4.5 + Math.random();
+        const vibG = ctx.createGain();
+        vibG.gain.value = 1.5; // ±1.5 Hz
+        vib.connect(vibG).connect(osc.frequency);
+        vib.start(now);
+
+        const g = ctx.createGain();
+        const vol = 0.016 + Math.random() * 0.008;
+        const dur = 2.8 + Math.random() * 2;
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.exponentialRampToValueAtTime(vol, now + 0.05);
+        g.gain.exponentialRampToValueAtTime(vol * 0.5, now + dur * 0.4);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
+        osc.connect(g);
+        g.connect(this.masterGain!);
+        g.connect(this.reverbSend!);
+        osc.start(now);
+        osc.stop(now + dur + 0.1);
+        vib.stop(now + dur + 0.1);
+
+        // quiet octave shimmer ~30% of the time
+        if (Math.random() > 0.7) {
+            const osc2 = ctx.createOscillator();
+            osc2.type = "sine";
+            osc2.frequency.value = freq * 2;
+            const g2 = ctx.createGain();
+            g2.gain.setValueAtTime(0.0001, now + 0.1);
+            g2.gain.exponentialRampToValueAtTime(0.005, now + 0.16);
+            g2.gain.exponentialRampToValueAtTime(0.0001, now + dur * 0.7);
+            osc2.connect(g2);
+            g2.connect(this.reverbSend!);
+            osc2.start(now + 0.1);
+            osc2.stop(now + dur);
+        }
+    }
+
+    private rootFreq() {
+        return this.midiToFreq(this.chords[this.harmStep % this.chords.length].root);
+    }
+
+    /* ═══════════════════════════════════════════════════════════════════════
+     *  SFX HELPERS
+     * ═══════════════════════════════════════════════════════════════════════ */
 
     private midiToFreq(midi: number): number {
         return 440 * Math.pow(2, (midi - 69) / 12);
     }
 
-    private playTone(
+    /** Play a short SFX tone routed to destination (bypasses music bus). */
+    private playSfxTone(
         frequency: number,
         opts: {
             duration: number;
@@ -126,67 +351,6 @@ class SFX {
 
         osc.start(now);
         osc.stop(now + opts.duration);
-    }
-
-    private playMusicStep() {
-        const ctx = this.ensure();
-        if (ctx.state !== "running") return;
-
-        const song = this.songs[this.songIndex % this.songs.length];
-        const step = this.musicStep % song.melody.length;
-
-        const melodyMidi = song.melody[step];
-        if (melodyMidi >= 0) {
-            const melodyFreq = this.midiToFreq(melodyMidi);
-            this.playTone(melodyFreq, {
-                duration: 0.72,
-                volume: 0.024,
-                type: "sine",
-                attack: 0.04,
-                release: 0.66,
-            });
-
-            if (step % 8 === 0 || Math.random() > 0.9) {
-                this.playTone(melodyFreq * 2, {
-                    duration: 0.58,
-                    volume: 0.006,
-                    type: "sine",
-                    attack: 0.06,
-                    release: 0.54,
-                    detune: 2,
-                });
-            }
-        }
-
-        if (step % 2 === 0) {
-            const bass = song.bass[(step / 2) % song.bass.length];
-            if (bass >= 0) {
-                this.playTone(this.midiToFreq(bass), {
-                    duration: 1.35,
-                    volume: 0.012,
-                    type: "triangle",
-                    attack: 0.06,
-                    release: 1.2,
-                });
-            }
-        }
-
-        if (step % 4 === 0) {
-            const root = song.chordRoots[(step / 4) % song.chordRoots.length];
-            const chord = [root, root + 3, root + 7, root + 10];
-            chord.forEach((midi, idx) => {
-                this.playTone(this.midiToFreq(midi), {
-                    duration: 1.68,
-                    volume: 0.007 / (idx + 1),
-                    type: "sine",
-                    attack: 0.08,
-                    release: 1.45,
-                    detune: idx,
-                });
-            });
-        }
-
-        this.musicStep++;
     }
 
     pop() {
