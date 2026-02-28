@@ -27,35 +27,21 @@ class SFX {
     private sfxEnabled = true;
     private musicEnabled = true;
 
-    private readonly musicTickMs = 240;
+    private readonly musicTickMs = 420;
 
     private readonly songs = [
         {
-            name: "Greensleeves",
+            name: "Gymnopedie Mood",
             melody: [
-                69, 72, 74, 76, 74, 72, 71, 69, 67, 69, 71, 72, 71, 69, 67, -1, 69, 72, 74, 76, 79, 76, 74, 72, 71, 72,
-                74, 71, 69, 67, 69, -1,
+                66, -1, 69, -1, 71, -1, 69, -1, 66, -1, 64, -1, 62, -1, 64, -1, 66, -1, 69, -1, 71, -1, 73, -1, 71, -1,
+                69, -1, 66, -1, 64, -1, 62, -1, 64, -1, 66, -1, 69, -1, 71, -1, 69, -1, 66, -1, 64, -1, 62, -1, 61, -1,
+                62, -1, 64, -1, 66, -1, 64, -1, 62, -1, 59, -1,
             ],
-            bass: [45, -1, 45, -1, 43, -1, 43, -1, 41, -1, 41, -1, 43, -1, 43, -1],
-            chordRoots: [57, 57, 55, 55, 53, 53, 55, 55],
-        },
-        {
-            name: "Ode to Joy",
-            melody: [
-                64, 64, 65, 67, 67, 65, 64, 62, 60, 60, 62, 64, 64, 62, 62, -1, 64, 64, 65, 67, 67, 65, 64, 62, 60, 60,
-                62, 64, 62, 60, 60, -1,
+            bass: [
+                42, -1, -1, -1, 49, -1, -1, -1, 45, -1, -1, -1, 52, -1, -1, -1, 42, -1, -1, -1, 49, -1, -1, -1, 40, -1,
+                -1, -1, 47, -1, -1, -1,
             ],
-            bass: [48, -1, 48, -1, 55, -1, 55, -1, 53, -1, 53, -1, 55, -1, 55, -1],
-            chordRoots: [60, 60, 67, 67, 65, 65, 67, 67],
-        },
-        {
-            name: "Sakura",
-            melody: [
-                64, 67, 69, 67, 69, 71, 69, 67, 64, 67, 69, 67, 64, 62, 64, -1, 64, 67, 69, 71, 72, 71, 69, 67, 69, 67,
-                64, 62, 60, 62, 64, -1,
-            ],
-            bass: [45, -1, 45, -1, 47, -1, 47, -1, 43, -1, 43, -1, 45, -1, 45, -1],
-            chordRoots: [57, 57, 59, 59, 55, 55, 57, 57],
+            chordRoots: [54, 61, 57, 64, 54, 61, 52, 59],
         },
     ] as const;
 
@@ -98,7 +84,7 @@ class SFX {
     startMusic() {
         if (!this.musicEnabled || this.musicTimer !== null) return;
         this.musicStep = 0;
-        this.songIndex = Math.floor(Math.random() * this.songs.length);
+        this.songIndex = 0;
         this.musicTimer = window.setInterval(() => {
             if (!this.musicEnabled) return;
             this.playMusicStep();
@@ -153,21 +139,21 @@ class SFX {
         if (melodyMidi >= 0) {
             const melodyFreq = this.midiToFreq(melodyMidi);
             this.playTone(melodyFreq, {
-                duration: 0.25,
-                volume: 0.04,
-                type: "triangle",
-                attack: 0.01,
-                release: 0.22,
+                duration: 0.72,
+                volume: 0.024,
+                type: "sine",
+                attack: 0.04,
+                release: 0.66,
             });
 
-            if (step % 8 === 0 || Math.random() > 0.86) {
+            if (step % 8 === 0 || Math.random() > 0.9) {
                 this.playTone(melodyFreq * 2, {
-                    duration: 0.18,
-                    volume: 0.012,
+                    duration: 0.58,
+                    volume: 0.006,
                     type: "sine",
-                    attack: 0.01,
-                    release: 0.16,
-                    detune: 4,
+                    attack: 0.06,
+                    release: 0.54,
+                    detune: 2,
                 });
             }
         }
@@ -176,53 +162,30 @@ class SFX {
             const bass = song.bass[(step / 2) % song.bass.length];
             if (bass >= 0) {
                 this.playTone(this.midiToFreq(bass), {
-                    duration: 0.4,
-                    volume: 0.018,
-                    type: "sine",
-                    attack: 0.02,
-                    release: 0.34,
+                    duration: 1.35,
+                    volume: 0.012,
+                    type: "triangle",
+                    attack: 0.06,
+                    release: 1.2,
                 });
             }
         }
 
         if (step % 4 === 0) {
             const root = song.chordRoots[(step / 4) % song.chordRoots.length];
-            const chord = [root, root + 4, root + 7];
+            const chord = [root, root + 3, root + 7, root + 10];
             chord.forEach((midi, idx) => {
                 this.playTone(this.midiToFreq(midi), {
-                    duration: 0.62,
-                    volume: 0.012 / (idx + 1),
-                    type: "sawtooth",
-                    attack: 0.03,
-                    release: 0.56,
-                    detune: idx * 3,
+                    duration: 1.68,
+                    volume: 0.007 / (idx + 1),
+                    type: "sine",
+                    attack: 0.08,
+                    release: 1.45,
+                    detune: idx,
                 });
             });
         }
 
-        if (step % 4 === 2) {
-            const noise = ctx.createBufferSource();
-            const buffer = ctx.createBuffer(1, 2205, ctx.sampleRate);
-            const data = buffer.getChannelData(0);
-            for (let i = 0; i < data.length; i++) {
-                data[i] = (Math.random() * 2 - 1) * 0.08 * (1 - i / data.length);
-            }
-            const filter = ctx.createBiquadFilter();
-            filter.type = "highpass";
-            filter.frequency.value = 1400;
-            const gain = ctx.createGain();
-            gain.gain.value = 0.02;
-            noise.buffer = buffer;
-            noise.connect(filter);
-            filter.connect(gain);
-            gain.connect(ctx.destination);
-            noise.start();
-            noise.stop(ctx.currentTime + 0.08);
-        }
-
-        if (step === song.melody.length - 1) {
-            this.songIndex = (this.songIndex + 1) % this.songs.length;
-        }
         this.musicStep++;
     }
 
