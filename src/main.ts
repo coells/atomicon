@@ -341,7 +341,7 @@ enum Phase {
 
 // ─── Controller ──────────────────────────────────────────────────────────────
 
-class MicroCellsGame {
+class AtomiconGame {
     private grid: Grid;
     private renderer: Renderer;
     private sfx = new SFX();
@@ -369,7 +369,7 @@ class MicroCellsGame {
     private toggleSfxBtn: HTMLButtonElement;
     private toggleMusicBtn: HTMLButtonElement;
 
-    private readonly leaderboardKey = "microcells_leaderboard";
+    private readonly leaderboardKey = "atomicon_leaderboard";
 
     constructor() {
         const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
@@ -392,12 +392,12 @@ class MicroCellsGame {
         this.difficultyEl = document.getElementById("difficulty")!;
         this.comboEl = document.getElementById("combo")!;
 
-        const savedSfx = localStorage.getItem("microcells_sfx");
-        const savedMusic = localStorage.getItem("microcells_music");
+        const savedSfx = localStorage.getItem("atomicon_sfx");
+        const savedMusic = localStorage.getItem("atomicon_music");
         this.sfx.setSfxEnabled(savedSfx !== "off");
         this.sfx.setMusicEnabled(savedMusic !== "off");
 
-        this.best = parseInt(localStorage.getItem("microcells_best") || "0", 10);
+        this.best = parseInt(localStorage.getItem("atomicon_best") || "0", 10);
         this.bestEl.textContent = String(this.best);
 
         // Event listeners
@@ -433,14 +433,14 @@ class MicroCellsGame {
 
     private toggleSfx() {
         this.sfx.setSfxEnabled(!this.sfx.getSfxEnabled());
-        localStorage.setItem("microcells_sfx", this.sfx.getSfxEnabled() ? "on" : "off");
+        localStorage.setItem("atomicon_sfx", this.sfx.getSfxEnabled() ? "on" : "off");
         this.syncAudioButtons();
     }
 
     private toggleMusic() {
         const next = !this.sfx.getMusicEnabled();
         this.sfx.setMusicEnabled(next);
-        localStorage.setItem("microcells_music", next ? "on" : "off");
+        localStorage.setItem("atomicon_music", next ? "on" : "off");
         this.syncAudioButtons();
         if (next) {
             void this.sfx.unlock().then(() => this.sfx.startMusic());
@@ -610,7 +610,7 @@ class MicroCellsGame {
                 this.score += turnScore;
                 if (this.score > this.best) {
                     this.best = this.score;
-                    localStorage.setItem("microcells_best", String(this.best));
+                    localStorage.setItem("atomicon_best", String(this.best));
                 }
                 this.pendingRemove = toRemove;
                 this.pendingLineScore = turnScore;
@@ -663,7 +663,7 @@ class MicroCellsGame {
                 this.score += turnScore;
                 if (this.score > this.best) {
                     this.best = this.score;
-                    localStorage.setItem("microcells_best", String(this.best));
+                    localStorage.setItem("atomicon_best", String(this.best));
                 }
                 this.pendingRemove = toRemove;
                 this.phase = Phase.REMOVE_ANIM;
@@ -731,4 +731,4 @@ class MicroCellsGame {
 
 // ─── Boot ────────────────────────────────────────────────────────────────────
 
-new MicroCellsGame();
+new AtomiconGame();
