@@ -19,13 +19,48 @@ const SQRT3 = Math.sqrt(3);
 const BOARD_PADDING = 30;
 
 const CELL_THEMES: CellTheme[] = [
-    { core: "#ff6b8a", glow: "rgba(255,107,138,0.38)", membrane: "#ff96ad", nucleus: "#cc3a5c" },
-    { core: "#6be0ff", glow: "rgba(107,224,255,0.38)", membrane: "#91ebff", nucleus: "#2ab0d4" },
-    { core: "#7fefce", glow: "rgba(127,239,206,0.38)", membrane: "#a9f7df", nucleus: "#38bf98" },
-    { core: "#ffbe5c", glow: "rgba(255,190,92,0.38)", membrane: "#ffd38b", nucleus: "#d18f30" },
-    { core: "#c785ff", glow: "rgba(199,133,255,0.38)", membrane: "#dcb0ff", nucleus: "#9640e0" },
-    { core: "#ff85c0", glow: "rgba(255,133,192,0.38)", membrane: "#ffb2d9", nucleus: "#d44a90" },
-    { core: "#85c0ff", glow: "rgba(133,192,255,0.38)", membrane: "#aed8ff", nucleus: "#4a7fc4" },
+    /* 0 Cat  – vivid red    */ {
+        core: "#FF2D4F",
+        glow: "rgba(255,45,79,0.42)",
+        membrane: "#FF6B83",
+        nucleus: "#BF1030",
+    },
+    /* 1 Fish – deep blue    */ {
+        core: "#1E80FF",
+        glow: "rgba(30,128,255,0.42)",
+        membrane: "#60A8FF",
+        nucleus: "#0050CC",
+    },
+    /* 2 Frog – vivid green  */ {
+        core: "#2DD855",
+        glow: "rgba(45,216,85,0.42)",
+        membrane: "#72E890",
+        nucleus: "#14A832",
+    },
+    /* 3 Fox  – orange       */ {
+        core: "#FF8C00",
+        glow: "rgba(255,140,0,0.42)",
+        membrane: "#FFB347",
+        nucleus: "#CC6600",
+    },
+    /* 4 Owl  – rich purple  */ {
+        core: "#9B30FF",
+        glow: "rgba(155,48,255,0.42)",
+        membrane: "#BE7DFF",
+        nucleus: "#6B0FBF",
+    },
+    /* 5 Bunny– hot pink     */ {
+        core: "#FF4DAE",
+        glow: "rgba(255,77,174,0.42)",
+        membrane: "#FF8DC7",
+        nucleus: "#D4287A",
+    },
+    /* 6 Penguin–bright teal */ {
+        core: "#00CED1",
+        glow: "rgba(0,206,209,0.42)",
+        membrane: "#4DE8EA",
+        nucleus: "#008B8E",
+    },
 ];
 
 const JOKER_THEME: CellTheme = {
@@ -35,23 +70,7 @@ const JOKER_THEME: CellTheme = {
     nucleus: "#d6a72f",
 };
 
-type FaceStyle = {
-    eyeScale: number;
-    eyeY: number;
-    eyeTilt: number;
-    mouth: "smile" | "flat" | "o" | "grin" | "wink" | "cheeky" | "happy";
-    blush?: boolean;
-};
-
-const FACE_STYLES: FaceStyle[] = [
-    { eyeScale: 1, eyeY: -0.16, eyeTilt: -0.06, mouth: "smile", blush: true },
-    { eyeScale: 0.88, eyeY: -0.13, eyeTilt: 0, mouth: "o" },
-    { eyeScale: 1.05, eyeY: -0.15, eyeTilt: 0.05, mouth: "happy", blush: true },
-    { eyeScale: 0.92, eyeY: -0.14, eyeTilt: 0.03, mouth: "grin" },
-    { eyeScale: 0.85, eyeY: -0.16, eyeTilt: -0.04, mouth: "wink", blush: true },
-    { eyeScale: 1, eyeY: -0.12, eyeTilt: 0.02, mouth: "cheeky" },
-    { eyeScale: 1.08, eyeY: -0.13, eyeTilt: 0.01, mouth: "flat" },
-];
+const CHARACTER_NAMES = ["cat", "fish", "frog", "fox", "owl", "bunny", "penguin"] as const;
 
 export class Renderer {
     private canvas: HTMLCanvasElement;
@@ -400,169 +419,630 @@ export class Renderer {
             ctx.shadowBlur = 0;
         }
 
-        const membrane = ctx.createRadialGradient(cx - radius * 0.25, cy - radius * 0.25, radius * 0.2, cx, cy, radius);
-        membrane.addColorStop(0, theme.membrane);
-        membrane.addColorStop(0.72, theme.core);
-        membrane.addColorStop(1, theme.nucleus);
-        ctx.fillStyle = membrane;
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.fill();
-
-        const swirlT = this.animFrame * 0.022;
-        ctx.globalAlpha = alpha * 0.35;
-        for (let i = 0; i < 3; i++) {
-            const angle = swirlT + (i * Math.PI * 2) / 3;
-            const ox = cx + Math.cos(angle) * radius * 0.35;
-            const oy = cy + Math.sin(angle) * radius * 0.35;
-            ctx.fillStyle = theme.nucleus;
-            ctx.beginPath();
-            ctx.arc(ox, oy, radius * 0.14, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        ctx.globalAlpha = alpha * 0.78;
-        const highlight = ctx.createRadialGradient(cx - radius * 0.25, cy - radius * 0.26, 0, cx, cy, radius * 0.9);
-        highlight.addColorStop(0, "rgba(255,255,255,0.66)");
-        highlight.addColorStop(1, "transparent");
-        ctx.fillStyle = highlight;
-        ctx.beginPath();
-        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-        ctx.fill();
-
+        // Draw character
         if (color === JOKER_COLOR) {
-            this.drawJokerSymbol(cx, cy, radius * 0.52, alpha);
-            this.drawFace(cx, cy, radius * 0.86, FACE_STYLES[0], t, true);
+            this.drawJokerCharacter(cx, cy, radius, theme, t);
         } else {
-            this.drawFace(cx, cy, radius * 0.9, FACE_STYLES[color % FACE_STYLES.length], t);
+            const idx = color % CELL_THEMES.length;
+            switch (idx) {
+                case 0:
+                    this.drawCat(cx, cy, radius, theme, t);
+                    break;
+                case 1:
+                    this.drawFish(cx, cy, radius, theme, t);
+                    break;
+                case 2:
+                    this.drawFrog(cx, cy, radius, theme, t);
+                    break;
+                case 3:
+                    this.drawFox(cx, cy, radius, theme, t);
+                    break;
+                case 4:
+                    this.drawOwl(cx, cy, radius, theme, t);
+                    break;
+                case 5:
+                    this.drawBunny(cx, cy, radius, theme, t);
+                    break;
+                case 6:
+                    this.drawPenguin(cx, cy, radius, theme, t);
+                    break;
+            }
         }
 
         ctx.restore();
     }
 
-    private drawFace(cx: number, cy: number, r: number, style: FaceStyle, t: number, joker = false) {
+    /* ─── shared helpers ─── */
+
+    private drawBodyCircle(cx: number, cy: number, r: number, theme: CellTheme) {
         const ctx = this.ctx;
-        const blink = Math.sin(t * 0.35 + cx * 0.04 + cy * 0.03) > 0.92 ? 0.2 : 1;
+        const g = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.2, r * 0.1, cx, cy, r);
+        g.addColorStop(0, theme.membrane);
+        g.addColorStop(0.65, theme.core);
+        g.addColorStop(1, theme.nucleus);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
 
-        const eyeY = cy + r * style.eyeY;
-        const eyeDX = r * 0.28;
-        const eyeW = r * 0.12 * style.eyeScale;
-        const eyeH = r * 0.16 * blink;
+    private drawGloss(cx: number, cy: number, r: number) {
+        const ctx = this.ctx;
+        const a = ctx.globalAlpha;
+        ctx.globalAlpha *= 0.4;
+        const hl = ctx.createRadialGradient(cx - r * 0.22, cy - r * 0.28, 0, cx, cy, r * 0.85);
+        hl.addColorStop(0, "rgba(255,255,255,0.75)");
+        hl.addColorStop(1, "transparent");
+        ctx.fillStyle = hl;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = a;
+    }
 
-        if (style.blush) {
-            ctx.fillStyle = "rgba(255,190,205,0.25)";
+    /* ── 0  CAT (Red) ── */
+    private drawCat(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
+        const ctx = this.ctx;
+        const blink = Math.sin(t * 0.35 + cx * 0.04) > 0.92 ? 0.15 : 1;
+        const earW = Math.sin(t * 2.1) * 0.06;
+        const whisk = Math.sin(t * 1.8) * r * 0.04;
+
+        this.drawBodyCircle(cx, cy, r, theme);
+
+        // ears
+        for (const s of [-1, 1]) {
+            ctx.fillStyle = theme.nucleus;
             ctx.beginPath();
-            ctx.ellipse(cx - r * 0.38, cy + r * 0.07, r * 0.12, r * 0.07, 0, 0, Math.PI * 2);
-            ctx.ellipse(cx + r * 0.38, cy + r * 0.07, r * 0.12, r * 0.07, 0, 0, Math.PI * 2);
+            ctx.moveTo(cx + s * r * 0.6, cy - r * 0.35);
+            ctx.lineTo(cx + s * (r * 0.3 + earW * r), cy - r * 1.18);
+            ctx.lineTo(cx + s * r * 0.05, cy - r * 0.7);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = theme.membrane;
+            ctx.beginPath();
+            ctx.moveTo(cx + s * r * 0.5, cy - r * 0.4);
+            ctx.lineTo(cx + s * (r * 0.3 + earW * r), cy - r * 0.98);
+            ctx.lineTo(cx + s * r * 0.15, cy - r * 0.65);
+            ctx.closePath();
             ctx.fill();
         }
 
-        ctx.save();
-        ctx.translate(cx - eyeDX, eyeY);
-        ctx.rotate(style.eyeTilt);
-        ctx.fillStyle = "rgba(17, 24, 37, 0.85)";
-        ctx.beginPath();
-        ctx.ellipse(0, 0, eyeW, eyeH, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
+        this.drawGloss(cx, cy, r);
 
-        if (style.mouth !== "wink") {
+        // slit eyes
+        const eyeY = cy - r * 0.12;
+        for (const s of [-1, 1]) {
             ctx.save();
-            ctx.translate(cx + eyeDX, eyeY);
-            ctx.rotate(-style.eyeTilt);
-            ctx.fillStyle = "rgba(17, 24, 37, 0.85)";
+            ctx.translate(cx + s * r * 0.26, eyeY);
+            ctx.rotate(s * -0.15);
+            ctx.fillStyle = "#1a1a28";
             ctx.beginPath();
-            ctx.ellipse(0, 0, eyeW, eyeH, 0, 0, Math.PI * 2);
+            ctx.ellipse(0, 0, r * 0.13, r * 0.1 * blink, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#40FF70";
+            ctx.beginPath();
+            ctx.ellipse(0, 0, r * 0.035, r * 0.08 * blink, 0, 0, Math.PI * 2);
             ctx.fill();
             ctx.restore();
-        } else {
-            ctx.strokeStyle = "rgba(17, 24, 37, 0.85)";
-            ctx.lineWidth = r * 0.07;
-            ctx.lineCap = "round";
+        }
+
+        // nose
+        const ny = cy + r * 0.08;
+        ctx.fillStyle = "#FFB0C0";
+        ctx.beginPath();
+        ctx.moveTo(cx, ny + r * 0.07);
+        ctx.lineTo(cx - r * 0.06, ny);
+        ctx.lineTo(cx + r * 0.06, ny);
+        ctx.closePath();
+        ctx.fill();
+
+        // mouth
+        ctx.strokeStyle = "#1a1a28cc";
+        ctx.lineWidth = r * 0.045;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(cx - r * 0.07, ny + r * 0.13, r * 0.08, -0.6, 0.2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx + r * 0.07, ny + r * 0.13, r * 0.08, Math.PI - 0.2, Math.PI + 0.6);
+        ctx.stroke();
+
+        // whiskers
+        ctx.strokeStyle = "rgba(255,255,255,0.6)";
+        ctx.lineWidth = r * 0.025;
+        for (const s of [-1, 1]) {
+            for (let j = -1; j <= 1; j++) {
+                ctx.beginPath();
+                ctx.moveTo(cx + s * r * 0.22, ny + r * 0.05 + j * r * 0.07);
+                ctx.lineTo(cx + s * r * 0.88 + whisk * s, ny + j * r * 0.14 + whisk * 0.5);
+                ctx.stroke();
+            }
+        }
+    }
+
+    /* ── 1  FISH (Blue) ── */
+    private drawFish(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
+        const ctx = this.ctx;
+        const blink = Math.sin(t * 0.3 + cy * 0.05) > 0.93 ? 0.2 : 1;
+        const wig = Math.sin(t * 2.5) * r * 0.03;
+        const tailW = Math.sin(t * 3) * 0.25;
+
+        // oval body
+        const g = ctx.createRadialGradient(cx - r * 0.15, cy - r * 0.2, r * 0.1, cx, cy, r);
+        g.addColorStop(0, theme.membrane);
+        g.addColorStop(0.6, theme.core);
+        g.addColorStop(1, theme.nucleus);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.ellipse(cx + wig, cy, r * 1.05, r * 0.85, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // tail
+        ctx.fillStyle = theme.nucleus;
+        ctx.beginPath();
+        ctx.moveTo(cx - r * 0.85 + wig, cy);
+        ctx.lineTo(cx - r * 1.35, cy - r * 0.5 + tailW * r);
+        ctx.lineTo(cx - r * 1.35, cy + r * 0.5 + tailW * r);
+        ctx.closePath();
+        ctx.fill();
+
+        // dorsal fin
+        ctx.beginPath();
+        ctx.moveTo(cx - r * 0.15 + wig, cy - r * 0.8);
+        ctx.lineTo(cx + r * 0.15 + wig, cy - r * 1.1);
+        ctx.lineTo(cx + r * 0.35 + wig, cy - r * 0.75);
+        ctx.closePath();
+        ctx.fill();
+
+        this.drawGloss(cx + wig, cy, r * 0.95);
+
+        // scales
+        ctx.strokeStyle = "rgba(255,255,255,0.18)";
+        ctx.lineWidth = r * 0.03;
+        for (let rw = 0; rw < 2; rw++)
+            for (let cl = 0; cl < 3; cl++) {
+                ctx.beginPath();
+                ctx.arc(cx - r * 0.3 + cl * r * 0.3 + wig, cy - r * 0.15 + rw * r * 0.3, r * 0.12, 0.3, Math.PI - 0.3);
+                ctx.stroke();
+            }
+
+        // eye
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.ellipse(cx + r * 0.4 + wig, cy - r * 0.12, r * 0.16, r * 0.18 * blink, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#0a0a2a";
+        ctx.beginPath();
+        ctx.ellipse(cx + r * 0.43 + wig, cy - r * 0.12, r * 0.08, r * 0.1 * blink, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(cx + r * 0.46 + wig, cy - r * 0.17, r * 0.035, 0, Math.PI * 2);
+        ctx.fill();
+
+        // mouth
+        ctx.strokeStyle = "#0a0a2acc";
+        ctx.lineWidth = r * 0.05;
+        ctx.beginPath();
+        ctx.ellipse(cx + r * 0.7 + wig, cy + r * 0.05, r * 0.06, r * 0.08, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // bubbles
+        ctx.strokeStyle = "rgba(200,230,255,0.5)";
+        ctx.lineWidth = r * 0.03;
+        const bt = t * 1.5;
+        for (let i = 0; i < 3; i++) {
+            const by = cy - r * 0.4 - ((bt + i * 1.2) % 3) * r * 0.3;
+            const bx = cx + r * 0.8 + Math.sin(bt * 0.7 + i) * r * 0.1;
             ctx.beginPath();
-            ctx.moveTo(cx + eyeDX - r * 0.08, eyeY);
-            ctx.lineTo(cx + eyeDX + r * 0.08, eyeY);
+            ctx.arc(bx, by, r * (0.04 + i * 0.02), 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+
+    /* ── 2  FROG (Green) ── */
+    private drawFrog(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
+        const ctx = this.ctx;
+        const blL = Math.sin(t * 0.33 + cx * 0.03) > 0.9 ? 0.15 : 1;
+        const blR = Math.sin(t * 0.33 + cx * 0.03 + 0.5) > 0.93 ? 0.15 : 1;
+        const throat = Math.sin(t * 1.2) * r * 0.04;
+
+        this.drawBodyCircle(cx, cy + r * 0.08, r * 0.95, theme);
+
+        // bulging eyes
+        for (const s of [-1, 1]) {
+            const ex = cx + s * r * 0.42,
+                ey = cy - r * 0.62;
+            const bl = s === -1 ? blL : blR;
+            ctx.fillStyle = theme.core;
+            ctx.beginPath();
+            ctx.arc(ex, ey, r * 0.35, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#ffffffee";
+            ctx.beginPath();
+            ctx.ellipse(ex, ey, r * 0.25, r * 0.26 * bl, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#0a2a0a";
+            ctx.beginPath();
+            ctx.ellipse(ex + s * r * 0.04, ey, r * 0.12, r * 0.14 * bl, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(ex + s * r * 0.07, ey - r * 0.08, r * 0.06, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        this.drawGloss(cx, cy + r * 0.08, r * 0.95);
+
+        // spots
+        ctx.fillStyle = theme.nucleus + "40";
+        ctx.beginPath();
+        ctx.arc(cx - r * 0.35, cy + r * 0.15, r * 0.12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(cx + r * 0.28, cy - r * 0.05, r * 0.09, 0, Math.PI * 2);
+        ctx.fill();
+
+        // wide grin
+        ctx.strokeStyle = "#0a2a0acc";
+        ctx.lineWidth = r * 0.06;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(cx, cy + r * 0.15 + throat, r * 0.45, 0.15, Math.PI - 0.15);
+        ctx.stroke();
+
+        // blush
+        ctx.fillStyle = "rgba(255,180,200,0.25)";
+        for (const s of [-1, 1]) {
+            ctx.beginPath();
+            ctx.ellipse(cx + s * r * 0.5, cy + r * 0.2, r * 0.12, r * 0.08, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    /* ── 3  FOX (Orange) ── */
+    private drawFox(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
+        const ctx = this.ctx;
+        const blink = Math.sin(t * 0.32 + cy * 0.04) > 0.91 ? 0.15 : 1;
+        const earF = Math.sin(t * 1.9) * 0.04;
+
+        this.drawBodyCircle(cx, cy, r, theme);
+
+        // ears
+        for (const s of [-1, 1]) {
+            ctx.fillStyle = theme.nucleus;
+            ctx.beginPath();
+            ctx.moveTo(cx + s * r * 0.62, cy - r * 0.28);
+            ctx.lineTo(cx + s * (r * 0.42 + earF * r), cy - r * 1.22);
+            ctx.lineTo(cx + s * r * 0.08, cy - r * 0.68);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = "#2a1a0a";
+            ctx.beginPath();
+            ctx.moveTo(cx + s * r * 0.52, cy - r * 0.35);
+            ctx.lineTo(cx + s * (r * 0.42 + earF * r), cy - r * 1.02);
+            ctx.lineTo(cx + s * r * 0.18, cy - r * 0.6);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // white muzzle
+        ctx.fillStyle = "rgba(255,250,240,0.85)";
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + r * 0.25, r * 0.4, r * 0.38, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        this.drawGloss(cx, cy, r);
+
+        // sly eyes
+        const eyeY = cy - r * 0.1;
+        for (const s of [-1, 1]) {
+            ctx.save();
+            ctx.translate(cx + s * r * 0.28, eyeY);
+            ctx.rotate(s * 0.12);
+            ctx.fillStyle = "#1a1008";
+            ctx.beginPath();
+            ctx.ellipse(0, 0, r * 0.14, r * 0.07 * blink, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#FFB020";
+            ctx.beginPath();
+            ctx.ellipse(0, 0, r * 0.06, r * 0.05 * blink, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        // nose
+        ctx.fillStyle = "#1a1008";
+        ctx.beginPath();
+        ctx.arc(cx, cy + r * 0.12, r * 0.07, 0, Math.PI * 2);
+        ctx.fill();
+
+        // smirk
+        ctx.strokeStyle = "#1a1008cc";
+        ctx.lineWidth = r * 0.04;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(cx + r * 0.03, cy + r * 0.22, r * 0.15, 0.1, Math.PI - 0.5);
+        ctx.stroke();
+    }
+
+    /* ── 4  OWL (Purple) ── */
+    private drawOwl(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
+        const ctx = this.ctx;
+        const pupil = 0.85 + Math.sin(t * 0.8) * 0.15;
+        const tilt = Math.sin(t * 0.6) * 0.06;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(tilt);
+        ctx.translate(-cx, -cy);
+
+        this.drawBodyCircle(cx, cy, r, theme);
+
+        // ear tufts
+        for (const s of [-1, 1]) {
+            ctx.fillStyle = theme.nucleus;
+            ctx.beginPath();
+            ctx.moveTo(cx + s * r * 0.45, cy - r * 0.65);
+            ctx.lineTo(cx + s * r * 0.3, cy - r * 1.2);
+            ctx.lineTo(cx + s * r * 0.15, cy - r * 0.7);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // wing ridges
+        ctx.strokeStyle = theme.nucleus + "80";
+        ctx.lineWidth = r * 0.06;
+        ctx.lineCap = "round";
+        for (const s of [-1, 1]) {
+            ctx.beginPath();
+            ctx.arc(
+                cx + s * r * 0.6,
+                cy + r * 0.1,
+                r * 0.35,
+                s === 1 ? Math.PI * 0.6 : -Math.PI * 0.15,
+                s === 1 ? Math.PI * 1.4 : Math.PI * 0.65,
+            );
             ctx.stroke();
         }
 
-        ctx.strokeStyle = joker ? "rgba(77, 39, 0, 0.8)" : "rgba(30, 39, 58, 0.82)";
-        ctx.fillStyle = joker ? "rgba(255, 227, 156, 0.85)" : "rgba(236, 245, 255, 0.6)";
-        ctx.lineWidth = r * 0.06;
-        const mouthY = cy + r * 0.2;
+        this.drawGloss(cx, cy, r);
 
-        switch (style.mouth) {
-            case "smile":
-            case "happy":
-                ctx.beginPath();
-                ctx.arc(cx, mouthY - r * 0.04, r * (style.mouth === "happy" ? 0.22 : 0.18), 0.2, Math.PI - 0.2);
-                ctx.stroke();
-                break;
-            case "grin":
-                ctx.beginPath();
-                ctx.arc(cx, mouthY - r * 0.03, r * 0.19, 0.15, Math.PI - 0.15);
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.moveTo(cx - r * 0.12, mouthY + r * 0.05);
-                ctx.lineTo(cx + r * 0.12, mouthY + r * 0.05);
-                ctx.stroke();
-                break;
-            case "flat":
-                ctx.beginPath();
-                ctx.moveTo(cx - r * 0.16, mouthY + r * 0.02);
-                ctx.lineTo(cx + r * 0.16, mouthY + r * 0.02);
-                ctx.stroke();
-                break;
-            case "o":
-                ctx.beginPath();
-                ctx.ellipse(cx, mouthY, r * 0.09, r * 0.11, 0, 0, Math.PI * 2);
-                ctx.stroke();
-                break;
-            case "cheeky":
-                ctx.beginPath();
-                ctx.arc(cx - r * 0.03, mouthY - r * 0.02, r * 0.16, 0.1, Math.PI - 0.5);
-                ctx.stroke();
-                ctx.beginPath();
-                ctx.ellipse(cx + r * 0.12, mouthY + r * 0.03, r * 0.05, r * 0.08, 0, 0, Math.PI * 2);
-                ctx.fill();
-                break;
-            default:
-                ctx.beginPath();
-                ctx.arc(cx, mouthY, r * 0.17, 0.2, Math.PI - 0.2);
-                ctx.stroke();
-                break;
+        // big round eyes
+        const eyeY = cy - r * 0.1;
+        for (const s of [-1, 1]) {
+            ctx.strokeStyle = theme.membrane;
+            ctx.lineWidth = r * 0.06;
+            ctx.beginPath();
+            ctx.arc(cx + s * r * 0.28, eyeY, r * 0.25, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.fillStyle = "#FFF8E0";
+            ctx.beginPath();
+            ctx.arc(cx + s * r * 0.28, eyeY, r * 0.22, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#1a0a28";
+            ctx.beginPath();
+            ctx.arc(cx + s * r * 0.28, eyeY, r * 0.13 * pupil, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(cx + s * r * 0.32, eyeY - r * 0.06, r * 0.05, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // beak
+        ctx.fillStyle = "#FFB030";
+        ctx.beginPath();
+        ctx.moveTo(cx, eyeY + r * 0.22);
+        ctx.lineTo(cx - r * 0.08, eyeY + r * 0.12);
+        ctx.lineTo(cx + r * 0.08, eyeY + r * 0.12);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    /* ── 5  BUNNY (Pink) ── */
+    private drawBunny(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
+        const ctx = this.ctx;
+        const blink = Math.sin(t * 0.36 + cx * 0.05) > 0.91 ? 0.15 : 1;
+        const earFlop = Math.sin(t * 1.3) * 0.08;
+        const noseTw = Math.sin(t * 3.5) * r * 0.015;
+
+        this.drawBodyCircle(cx, cy + r * 0.05, r * 0.95, theme);
+
+        // long ears
+        for (const s of [-1, 1]) {
+            ctx.save();
+            ctx.translate(cx + s * r * 0.25, cy - r * 0.6);
+            ctx.rotate(s * (0.2 + earFlop));
+            ctx.fillStyle = theme.core;
+            ctx.beginPath();
+            ctx.ellipse(0, -r * 0.55, r * 0.2, r * 0.58, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = theme.membrane;
+            ctx.beginPath();
+            ctx.ellipse(0, -r * 0.55, r * 0.12, r * 0.45, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        this.drawGloss(cx, cy + r * 0.05, r * 0.95);
+
+        // sparkly eyes
+        const eyeY = cy - r * 0.08;
+        for (const s of [-1, 1]) {
+            ctx.fillStyle = "#1a0a1a";
+            ctx.beginPath();
+            ctx.ellipse(cx + s * r * 0.24, eyeY, r * 0.12, r * 0.14 * blink, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(cx + s * r * 0.28, eyeY - r * 0.06, r * 0.04, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(cx + s * r * 0.2, eyeY + r * 0.02, r * 0.025, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // twitching nose
+        ctx.fillStyle = "#FF8095";
+        ctx.beginPath();
+        ctx.ellipse(cx + noseTw, cy + r * 0.12, r * 0.06, r * 0.045, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // buck teeth
+        ctx.fillStyle = "white";
+        ctx.strokeStyle = "#ddd";
+        ctx.lineWidth = r * 0.02;
+        for (const s of [-0.5, 0.5]) {
+            const tx = cx + s * r * 0.08 - r * 0.04;
+            ctx.beginPath();
+            ctx.rect(tx, cy + r * 0.18, r * 0.08, r * 0.11);
+            ctx.fill();
+            ctx.stroke();
+        }
+
+        // rosy cheeks
+        ctx.fillStyle = "rgba(255,150,180,0.3)";
+        for (const s of [-1, 1]) {
+            ctx.beginPath();
+            ctx.ellipse(cx + s * r * 0.45, cy + r * 0.08, r * 0.12, r * 0.08, 0, 0, Math.PI * 2);
+            ctx.fill();
         }
     }
 
-    private drawJokerSymbol(cx: number, cy: number, r: number, alpha: number) {
+    /* ── 6  PENGUIN (Teal) ── */
+    private drawPenguin(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
         const ctx = this.ctx;
-        const rot = this.animFrame * 0.015;
+        const blink = Math.sin(t * 0.34 + cy * 0.03) > 0.92 ? 0.2 : 1;
+        const waddle = Math.sin(t * 2.2) * 0.05;
+        const flipW = Math.sin(t * 2) * 0.15;
 
         ctx.save();
-        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.rotate(waddle);
+        ctx.translate(-cx, -cy);
+
+        // dark body
+        const g = ctx.createRadialGradient(cx - r * 0.1, cy - r * 0.15, r * 0.1, cx, cy, r);
+        g.addColorStop(0, "#2a4a5a");
+        g.addColorStop(0.6, theme.nucleus);
+        g.addColorStop(1, "#0a2a2a");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+
+        // white belly
+        ctx.fillStyle = "rgba(240,252,255,0.92)";
+        ctx.beginPath();
+        ctx.ellipse(cx, cy + r * 0.15, r * 0.55, r * 0.65, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // flippers
+        for (const s of [-1, 1]) {
+            ctx.fillStyle = theme.nucleus;
+            ctx.save();
+            ctx.translate(cx + s * r * 0.8, cy - r * 0.05);
+            ctx.rotate(s * (0.4 + flipW));
+            ctx.beginPath();
+            ctx.ellipse(0, 0, r * 0.15, r * 0.38, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+
+        this.drawGloss(cx, cy, r);
+
+        // eyes
+        const eyeY = cy - r * 0.18;
+        for (const s of [-1, 1]) {
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.ellipse(cx + s * r * 0.22, eyeY, r * 0.12, r * 0.14 * blink, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#0a0a1a";
+            ctx.beginPath();
+            ctx.ellipse(cx + s * r * 0.22, eyeY, r * 0.07, r * 0.09 * blink, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(cx + s * r * 0.25, eyeY - r * 0.05, r * 0.03, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // orange beak
+        ctx.fillStyle = "#FFA030";
+        ctx.beginPath();
+        ctx.moveTo(cx - r * 0.1, cy + r * 0.02);
+        ctx.lineTo(cx, cy + r * 0.16);
+        ctx.lineTo(cx + r * 0.1, cy + r * 0.02);
+        ctx.closePath();
+        ctx.fill();
+
+        // blush
+        ctx.fillStyle = "rgba(255,180,200,0.3)";
+        for (const s of [-1, 1]) {
+            ctx.beginPath();
+            ctx.ellipse(cx + s * r * 0.38, cy + r * 0.05, r * 0.1, r * 0.06, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+
+    /* ── JOKER (Gold star) ── */
+    private drawJokerCharacter(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
+        const ctx = this.ctx;
+        const rot = t * 0.4;
+        const sparkle = 0.85 + Math.sin(t * 2) * 0.15;
+
+        this.drawBodyCircle(cx, cy, r, theme);
+
+        // spinning star
+        ctx.save();
         ctx.translate(cx, cy);
         ctx.rotate(rot);
-        ctx.strokeStyle = "rgba(255,255,255,0.9)";
-        ctx.lineWidth = 1.6;
+        ctx.fillStyle = "rgba(255,255,255,0.25)";
         ctx.beginPath();
-        for (let i = 0; i < 6; i++) {
-            const a = (i * Math.PI) / 3;
-            const x = Math.cos(a) * r;
-            const y = Math.sin(a) * r;
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
+        for (let i = 0; i < 12; i++) {
+            const a = (i * Math.PI) / 6 - Math.PI / 2;
+            const d = i % 2 === 0 ? r * 0.7 : r * 0.3;
+            if (i === 0) ctx.moveTo(Math.cos(a) * d, Math.sin(a) * d);
+            else ctx.lineTo(Math.cos(a) * d, Math.sin(a) * d);
         }
         ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        this.drawGloss(cx, cy, r);
+
+        // happy face
+        const blink = Math.sin(t * 0.35) > 0.92 ? 0.15 : 1;
+        const eyeY = cy - r * 0.14;
+        for (const s of [-1, 1]) {
+            ctx.fillStyle = "#4a2a00dd";
+            ctx.beginPath();
+            ctx.ellipse(cx + s * r * 0.22, eyeY, r * 0.09, r * 0.11 * blink * sparkle, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "white";
+            ctx.beginPath();
+            ctx.arc(cx + s * r * 0.25, eyeY - r * 0.04, r * 0.03, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.strokeStyle = "#4a2a00cc";
+        ctx.lineWidth = r * 0.06;
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.arc(cx, cy + r * 0.1, r * 0.2, 0.2, Math.PI - 0.2);
         ctx.stroke();
 
-        ctx.rotate(-rot * 1.7);
-        ctx.strokeStyle = "rgba(255,235,170,0.95)";
-        ctx.beginPath();
-        ctx.moveTo(0, -r * 0.95);
-        ctx.lineTo(0, r * 0.95);
-        ctx.moveTo(-r * 0.95, 0);
-        ctx.lineTo(r * 0.95, 0);
-        ctx.stroke();
-        ctx.restore();
+        ctx.fillStyle = "rgba(255,200,100,0.3)";
+        for (const s of [-1, 1]) {
+            ctx.beginPath();
+            ctx.ellipse(cx + s * r * 0.35, cy + r * 0.08, r * 0.1, r * 0.06, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
 
     getThemeColor(colorIdx: CellColor): string {
