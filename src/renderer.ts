@@ -70,6 +70,15 @@ const JOKER_THEME: CellTheme = {
     nucleus: "#d6a72f",
 };
 
+/** Five colors used for joker segments */
+const JOKER_SEGMENT_COLORS = [
+    CELL_THEMES[0].core, // red
+    CELL_THEMES[1].core, // blue
+    CELL_THEMES[2].core, // green
+    CELL_THEMES[3].core, // orange
+    CELL_THEMES[4].core, // purple
+];
+
 const CHARACTER_NAMES = ["cat", "fish", "frog", "fox", "owl", "bunny", "penguin"] as const;
 
 export class Renderer {
@@ -991,37 +1000,72 @@ export class Renderer {
         ctx.restore();
     }
 
-    /* ── JOKER (Gold star) ── */
-    private drawJokerCharacter(cx: number, cy: number, r: number, theme: CellTheme, t: number) {
+    /* ── JOKER (5-color pinwheel) ── */
+    private drawJokerCharacter(cx: number, cy: number, r: number, _theme: CellTheme, t: number) {
         const ctx = this.ctx;
         const rot = t * 0.4;
         const sparkle = 0.85 + Math.sin(t * 2) * 0.15;
+        const segCount = JOKER_SEGMENT_COLORS.length;
+        const segAngle = (Math.PI * 2) / segCount;
 
-        this.drawBodyCircle(cx, cy, r, theme);
-
-        // spinning star
+        // Draw 5-color pinwheel body
         ctx.save();
         ctx.translate(cx, cy);
         ctx.rotate(rot);
-        ctx.fillStyle = "rgba(255,255,255,0.25)";
+        for (let i = 0; i < segCount; i++) {
+            const startA = segAngle * i - Math.PI / 2;
+            const endA = startA + segAngle;
+            ctx.fillStyle = JOKER_SEGMENT_COLORS[i];
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.arc(0, 0, r, startA, endA);
+            ctx.closePath();
+            ctx.fill();
+        }
+        // Lighter inner ring for depth
+        for (let i = 0; i < segCount; i++) {
+            const startA = segAngle * i - Math.PI / 2;
+            const endA = startA + segAngle;
+            ctx.fillStyle = JOKER_SEGMENT_COLORS[(i + 2) % segCount] + "55";
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.arc(0, 0, r * 0.5, startA, endA);
+            ctx.closePath();
+            ctx.fill();
+        }
+        ctx.restore();
+
+        // White shimmer overlay
+        const hl = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.25, 0, cx, cy, r * 0.85);
+        hl.addColorStop(0, "rgba(255,255,255,0.4)");
+        hl.addColorStop(1, "transparent");
+        ctx.fillStyle = hl;
         ctx.beginPath();
-        for (let i = 0; i < 12; i++) {
-            const a = (i * Math.PI) / 6 - Math.PI / 2;
-            const d = i % 2 === 0 ? r * 0.7 : r * 0.3;
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Spinning white star outline
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(rot * -0.6);
+        ctx.strokeStyle = "rgba(255,255,255,0.5)";
+        ctx.lineWidth = r * 0.04;
+        ctx.beginPath();
+        for (let i = 0; i < 10; i++) {
+            const a = (i * Math.PI) / 5 - Math.PI / 2;
+            const d = i % 2 === 0 ? r * 0.65 : r * 0.3;
             if (i === 0) ctx.moveTo(Math.cos(a) * d, Math.sin(a) * d);
             else ctx.lineTo(Math.cos(a) * d, Math.sin(a) * d);
         }
         ctx.closePath();
-        ctx.fill();
+        ctx.stroke();
         ctx.restore();
 
-        this.drawGloss(cx, cy, r);
-
-        // happy face
+        // happy face on top
         const blink = Math.sin(t * 0.35) > 0.92 ? 0.15 : 1;
         const eyeY = cy - r * 0.14;
         for (const s of [-1, 1]) {
-            ctx.fillStyle = "#4a2a00dd";
+            ctx.fillStyle = "#1a1a28dd";
             ctx.beginPath();
             ctx.ellipse(cx + s * r * 0.22, eyeY, r * 0.09, r * 0.11 * blink * sparkle, 0, 0, Math.PI * 2);
             ctx.fill();
@@ -1030,14 +1074,14 @@ export class Renderer {
             ctx.arc(cx + s * r * 0.25, eyeY - r * 0.04, r * 0.03, 0, Math.PI * 2);
             ctx.fill();
         }
-        ctx.strokeStyle = "#4a2a00cc";
+        ctx.strokeStyle = "#1a1a28cc";
         ctx.lineWidth = r * 0.06;
         ctx.lineCap = "round";
         ctx.beginPath();
         ctx.arc(cx, cy + r * 0.1, r * 0.2, 0.2, Math.PI - 0.2);
         ctx.stroke();
 
-        ctx.fillStyle = "rgba(255,200,100,0.3)";
+        ctx.fillStyle = "rgba(255,255,255,0.2)";
         for (const s of [-1, 1]) {
             ctx.beginPath();
             ctx.ellipse(cx + s * r * 0.35, cy + r * 0.08, r * 0.1, r * 0.06, 0, 0, Math.PI * 2);
@@ -1046,7 +1090,10 @@ export class Renderer {
     }
 
     getThemeColor(colorIdx: CellColor): string {
-        if (colorIdx === JOKER_COLOR) return JOKER_THEME.core;
+        if (colorIdx === JOKER_COLOR) {
+            // Return a CSS conic gradient for preview dots
+            return JOKER_SEGMENT_COLORS[Math.floor(Math.random() * JOKER_SEGMENT_COLORS.length)];
+        }
         if (colorIdx < 0) return "transparent";
         return CELL_THEMES[colorIdx % CELL_THEMES.length].core;
     }

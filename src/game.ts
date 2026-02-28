@@ -1,6 +1,6 @@
 export const GRID_SIZE = 9;
 export const HEX_RADIUS = 4;
-export const VALID_CELL_COUNT = 61;
+export const VALID_CELL_COUNT = 60;
 export const NUM_COLORS = 7;
 export const JOKER_COLOR = NUM_COLORS;
 export const EMPTY_COLOR = -1;
@@ -41,7 +41,10 @@ export function isValidCell(pos: Position): boolean {
     const q = pos.col - HEX_RADIUS;
     const r = pos.row - HEX_RADIUS;
     const s = -q - r;
-    return Math.max(Math.abs(q), Math.abs(r), Math.abs(s)) <= HEX_RADIUS;
+    if (Math.max(Math.abs(q), Math.abs(r), Math.abs(s)) > HEX_RADIUS) return false;
+    // Remove the central cell
+    if (q === 0 && r === 0) return false;
+    return true;
 }
 
 export function getAllValidPositions(): Position[] {
@@ -88,7 +91,7 @@ export function countOccupied(grid: Grid): number {
 }
 
 function jokerChance(moveCount: number): number {
-    return Math.min(0.12, 0.03 + moveCount * 0.0015);
+    return Math.min(0.05, 0.01 + moveCount * 0.0006);
 }
 
 function randomColor(moveCount: number): CellColor {
