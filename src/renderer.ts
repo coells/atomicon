@@ -101,6 +101,24 @@ export class Renderer {
 
     private comboLevel = 0; // 0 = no combo, 2 = 2x, 3 = 3x, etc.
 
+    /** Ambient particle color cycling (independent of combo) */
+    private readonly ambientPalette: [number, number, number][] = [
+        [174, 219, 255], // cool blue/white (default)
+        [180, 255, 210], // mint green
+        [220, 180, 255], // soft lavender
+        [255, 200, 160], // warm peach
+        [160, 230, 255], // sky blue
+        [255, 180, 220], // soft pink
+        [200, 255, 180], // lime
+    ];
+    private ambientColorIdx = 0;
+    private ambientColorNext = 1;
+    private ambientBlend = 0; // 0..1 interpolation between idx and next
+    private lastColorCycleTime = performance.now();
+    private colorCycleDuration = 60000; // ms until next color switch
+    private colorTransitionDuration = 3000; // ms for smooth blend
+    private colorTransitioning = false;
+
     onAnimationComplete: (() => void) | null = null;
 
     constructor(canvas: HTMLCanvasElement) {
@@ -318,6 +336,48 @@ export class Renderer {
         this.selectedBounce += 0.14;
     }
 
+    /** Advance ambient color cycling timer */
+    private tickAmbientColor() {
+        const now = performance.now();
+        if (!this.colorTransitioning) {
+            // Check if it's time to start a new transition
+            if (now - this.lastColorCycleTime >= this.colorCycleDuration) {
+                this.colorTransitioning = true;
+                this.ambientColorNext =
+                    (this.ambientColorIdx + 1 + Math.floor(Math.random() * (this.ambientPalette.length - 1))) %
+                    this.ambientPalette.length;
+                this.ambientBlend = 0;
+                this.lastColorCycleTime = now;
+            }
+        } else {
+            // Smoothly blend
+            this.ambientBlend = Math.min(1, (now - this.lastColorCycleTime) / this.colorTransitionDuration);
+            if (this.ambientBlend >= 1) {
+                this.ambientColorIdx = this.ambientColorNext;
+                this.ambientBlend = 0;
+                this.colorTransitioning = false;
+                this.lastColorCycleTime = now;
+                // Randomize next interval between 45-75s
+                this.colorCycleDuration = 45000 + Math.random() * 30000;
+            }
+        }
+    }
+
+    /** Get the current ambient particle color, blended between palette entries */
+    private getAmbientColor(): [number, number, number] {
+        const a = this.ambientPalette[this.ambientColorIdx];
+        if (!this.colorTransitioning) return a;
+        const b = this.ambientPalette[this.ambientColorNext];
+        const t = this.ambientBlend;
+        // Smooth ease-in-out
+        const s = t * t * (3 - 2 * t);
+        return [
+            Math.round(a[0] + (b[0] - a[0]) * s),
+            Math.round(a[1] + (b[1] - a[1]) * s),
+            Math.round(a[2] + (b[2] - a[2]) * s),
+        ];
+    }
+
     private drawSceneParticles() {
         const ctx = this.ctx;
         // Speed multiplier based on combo level
@@ -325,23 +385,24 @@ export class Renderer {
         const t = this.animFrame * 0.01 * speedMult;
         const count = this.comboLevel >= 3 ? 40 : this.comboLevel >= 2 ? 34 : 28;
 
-        // Color based on combo level
+        // Advance ambient color cycling
+        this.tickAmbientColor();
+
+        // Color: combo overrides ambient cycling
         let particleR: number, particleG: number, particleB: number;
         if (this.comboLevel >= 3) {
-            // Red/orange for 3x+
             particleR = 255;
             particleG = 100;
             particleB = 80;
         } else if (this.comboLevel >= 2) {
-            // Yellow/gold for 2x
             particleR = 255;
             particleG = 220;
             particleB = 100;
         } else {
-            // Default cool blue/white
-            particleR = 174;
-            particleG = 219;
-            particleB = 255;
+            const [ar, ag, ab] = this.getAmbientColor();
+            particleR = ar;
+            particleG = ag;
+            particleB = ab;
         }
 
         for (let i = 0; i < count; i++) {

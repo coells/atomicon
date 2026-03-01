@@ -440,7 +440,9 @@ class SFX {
     gameOver() {
         if (!this.sfxEnabled) return;
         const ctx = this.ensure();
-        const notes = [400, 350, 300, 200];
+        // Triumphant ascending fanfare: C5 → E5 → G5 → C6
+        const notes = [523, 659, 784, 1047];
+        const now = ctx.currentTime;
         notes.forEach((freq, i) => {
             const osc = ctx.createOscillator();
             const gain = ctx.createGain();
@@ -448,11 +450,29 @@ class SFX {
             gain.connect(ctx.destination);
             osc.type = "sine";
             osc.frequency.value = freq;
-            gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.15);
-            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.15 + 0.3);
-            osc.start(ctx.currentTime + i * 0.15);
-            osc.stop(ctx.currentTime + i * 0.15 + 0.3);
+            const start = now + i * 0.12;
+            gain.gain.setValueAtTime(0.0001, start);
+            gain.gain.exponentialRampToValueAtTime(0.14, start + 0.04);
+            gain.gain.setValueAtTime(0.14, start + 0.18);
+            gain.gain.exponentialRampToValueAtTime(0.001, start + 0.45);
+            osc.start(start);
+            osc.stop(start + 0.5);
         });
+        // Final shimmering octave chord
+        for (const freq of [1047, 1318, 1568]) {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = "triangle";
+            osc.frequency.value = freq;
+            const start = now + 0.48;
+            gain.gain.setValueAtTime(0.0001, start);
+            gain.gain.exponentialRampToValueAtTime(0.08, start + 0.06);
+            gain.gain.exponentialRampToValueAtTime(0.001, start + 1.0);
+            osc.start(start);
+            osc.stop(start + 1.1);
+        }
     }
 }
 
