@@ -468,6 +468,9 @@ enum Phase {
 
 // ─── Controller ──────────────────────────────────────────────────────────────
 
+// Sound mode: 0=off, 1=effects only, 2=music only, 3=effects+music
+type SoundMode = 0 | 1 | 2 | 3;
+
 class AtomiconGame {
     private grid: Grid;
     private renderer: Renderer;
@@ -482,19 +485,16 @@ class AtomiconGame {
     private pendingRemove: Set<string> | null = null;
     private pendingLineScore = 0;
     private pendingLineCount = 0;
+    private soundMode: SoundMode = 3;
 
     // DOM refs
     private scoreEl: HTMLElement;
     private bestEl: HTMLElement;
     private messageEl: HTMLElement;
     private nextDots: HTMLElement[];
-    private difficultyEl: HTMLElement;
-    private comboEl: HTMLElement;
     private overlay: HTMLElement;
     private finalScoreEl: HTMLElement;
-    private leaderboardEl: HTMLOListElement;
-    private toggleSfxBtn: HTMLButtonElement;
-    private toggleMusicBtn: HTMLButtonElement;
+    private soundToggleBtn: HTMLButtonElement;
 
     private readonly leaderboardKey = "atomicon_leaderboard";
 
@@ -508,21 +508,19 @@ class AtomiconGame {
         this.messageEl = document.getElementById("message")!;
         this.overlay = document.getElementById("overlay")!;
         this.finalScoreEl = document.getElementById("final-score")!;
-        this.leaderboardEl = document.getElementById("leaderboard") as HTMLOListElement;
-        this.toggleSfxBtn = document.getElementById("toggle-sfx-btn") as HTMLButtonElement;
-        this.toggleMusicBtn = document.getElementById("toggle-music-btn") as HTMLButtonElement;
+        this.soundToggleBtn = document.getElementById("sound-toggle") as HTMLButtonElement;
         this.nextDots = [];
         for (let i = 0; i < PREVIEW_SIZE; i++) {
             const dot = document.getElementById(`next${i}`);
             if (dot) this.nextDots.push(dot);
         }
-        this.difficultyEl = document.getElementById("difficulty")!;
-        this.comboEl = document.getElementById("combo")!;
 
-        const savedSfx = localStorage.getItem("atomicon_sfx");
-        const savedMusic = localStorage.getItem("atomicon_music");
-        this.sfx.setSfxEnabled(savedSfx !== "off");
-        this.sfx.setMusicEnabled(savedMusic !== "off");
+        // Load sound mode from localStorage
+        const savedSoundMode = localStorage.getItem("atomicon_sound_mode");
+        if (savedSoundMode !== null) {
+            this.soundMode = parseInt(savedSoundMode, 10) as SoundMode;
+        }
+        this.applySoundMode();
 
         this.best = parseInt(localStorage.getItem("atomicon_best") || "0", 10);
         this.bestEl.textContent = String(this.best);
@@ -531,8 +529,7 @@ class AtomiconGame {
         canvas.addEventListener("click", (e) => this.handleClick(e));
         document.getElementById("new-game-btn")!.addEventListener("click", () => this.newGame());
         document.getElementById("play-again-btn")!.addEventListener("click", () => this.newGame());
-        this.toggleSfxBtn.addEventListener("click", () => this.toggleSfx());
-        this.toggleMusicBtn.addEventListener("click", () => this.toggleMusic());
+        this.soundToggleBtn.addEventListener("click", () => this.cycleSoundMode());
         window.addEventListener("keydown", (e) => this.handleHotkeys(e));
 
         window.addEventListener("resize", () => {
@@ -544,41 +541,51 @@ class AtomiconGame {
 
         this.newGame();
         this.loop();
-        this.syncAudioButtons();
-        this.renderLeaderboard();
-        void this.sfx.unlock().then(() => this.sfx.startMusic());
+        this.syncSoundButton();
+        void this.sfx.unlock().then(() => {
+            if (this.soundMode >= 2) this.sfx.startMusic();
+        });
     }
 
     private handleHotkeys(e: KeyboardEvent) {
-        if (e.key.toLowerCase() === "m") {
-            this.toggleMusic();
-        }
-        if (e.key.toLowerCase() === "s") {
-            this.toggleSfx();
+        if (e.key.toLowerCase() === "m" || e.key.toLowerCase() === "s") {
+            this.cycleSoundMode();
         }
     }
 
-    private toggleSfx() {
-        this.sfx.setSfxEnabled(!this.sfx.getSfxEnabled());
-        localStorage.setItem("atomicon_sfx", this.sfx.getSfxEnabled() ? "on" : "off");
-        this.syncAudioButtons();
+    private cycleSoundMode() {
+        this.soundMode = ((this.soundMode + 1) % 4) as SoundMode;
+        localStorage.setItem("atomicon_sound_mode", String(this.soundMode));
+        this.applySoundMode();
+        this.syncSoundButton();
     }
 
-    private toggleMusic() {
-        const next = !this.sfx.getMusicEnabled();
-        this.sfx.setMusicEnabled(next);
-        localStorage.setItem("atomicon_music", next ? "on" : "off");
-        this.syncAudioButtons();
-        if (next) {
+    private applySoundMode() {
+        const sfxOn = this.soundMode === 1 || this.soundMode === 3;
+        const musicOn = this.soundMode === 2 || this.soundMode === 3;
+        this.sfx.setSfxEnabled(sfxOn);
+        this.sfx.setMusicEnabled(musicOn);
+        if (musicOn) {
             void this.sfx.unlock().then(() => this.sfx.startMusic());
         }
     }
 
-    private syncAudioButtons() {
-        this.toggleSfxBtn.textContent = `SFX: ${this.sfx.getSfxEnabled() ? "ON" : "OFF"}`;
-        this.toggleMusicBtn.textContent = `Music: ${this.sfx.getMusicEnabled() ? "ON" : "OFF"}`;
-        this.toggleSfxBtn.classList.toggle("off", !this.sfx.getSfxEnabled());
-        this.toggleMusicBtn.classList.toggle("off", !this.sfx.getMusicEnabled());
+    private syncSoundButton() {
+        const icons: Record<SoundMode, string> = {
+            0: "\u{1F507}", // muted
+            1: "\u{1F509}", // effects only (low volume)
+            2: "\u{1F3B5}", // music only (note)
+            3: "\u{1F50A}", // all on (loud speaker)
+        };
+        const titles: Record<SoundMode, string> = {
+            0: "Sound: OFF",
+            1: "Sound: Effects",
+            2: "Sound: Music",
+            3: "Sound: All",
+        };
+        this.soundToggleBtn.textContent = icons[this.soundMode];
+        this.soundToggleBtn.title = titles[this.soundMode];
+        this.soundToggleBtn.classList.toggle("off", this.soundMode === 0);
     }
 
     private getLeaderboard(): number[] {
@@ -606,16 +613,6 @@ class AtomiconGame {
         scores.push(score);
         scores.sort((a, b) => b - a);
         this.storeLeaderboard(scores.slice(0, 5));
-        this.renderLeaderboard();
-    }
-
-    private renderLeaderboard() {
-        const scores = this.getLeaderboard();
-        const rows = Array.from({ length: 5 }, (_, i) => {
-            const value = scores[i] ?? 0;
-            return `<li><span>#${i + 1}</span><strong>${value}</strong></li>`;
-        });
-        this.leaderboardEl.innerHTML = rows.join("");
     }
 
     // ─── Game lifecycle ────────────────────────────────────────────────────
@@ -643,18 +640,24 @@ class AtomiconGame {
     private updateUI() {
         this.scoreEl.textContent = String(this.score);
         this.bestEl.textContent = String(this.best);
-        this.comboEl.textContent = this.combo > 1 ? `x${this.combo}` : "-";
+
+        // Pass combo level to renderer for particle effects
+        this.renderer.setComboLevel(this.combo);
 
         const occupied = countOccupied(this.grid);
         const spawnCount = getSpawnCount(this.moveCount, occupied / VALID_CELL_COUNT);
-        this.difficultyEl.textContent = `${spawnCount} / turn`;
 
-        // Next preview dots
+        // Next preview dots — hide dots beyond spawnCount entirely
         for (let i = 0; i < this.nextDots.length; i++) {
+            if (i >= spawnCount) {
+                this.nextDots[i].classList.add("hidden");
+                continue;
+            }
+            this.nextDots[i].classList.remove("hidden");
             const color = this.nextColors[i];
             this.nextDots[i].style.background =
                 color !== undefined ? this.renderer.getThemeColor(color) : "transparent";
-            this.nextDots[i].style.opacity = i < spawnCount ? "1" : "0.42";
+            this.nextDots[i].style.opacity = "1";
         }
     }
 

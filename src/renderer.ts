@@ -96,6 +96,11 @@ export class Renderer {
     private spawnAnim: { positions: Position[]; progress: number } | null = null;
     private removeAnim: { positions: Set<string>; progress: number } | null = null;
 
+    /** Trail particles emitted during path movement */
+    private trailParticles: { x: number; y: number; vx: number; vy: number; life: number; color: string }[] = [];
+
+    private comboLevel = 0; // 0 = no combo, 2 = 2x, 3 = 3x, etc.
+
     onAnimationComplete: (() => void) | null = null;
 
     constructor(canvas: HTMLCanvasElement) {
@@ -213,6 +218,10 @@ export class Renderer {
         this.selectedBounce = 0;
     }
 
+    setComboLevel(level: number) {
+        this.comboLevel = level;
+    }
+
     startPathAnimation(path: Position[], color: CellColor) {
         this.pathAnim = { path, progress: 0, color };
     }
@@ -298,9 +307,12 @@ export class Renderer {
 
         if (this.pathAnim && this.pathAnim.path.length > 0) {
             const p = this.interpolatedPathPosition(this.pathAnim.path, this.pathAnim.progress);
+            this.emitTrailParticles(p.x, p.y, this.pathAnim.color);
             this.drawMicroCell(p.x, p.y, this.pathAnim.color, 1, 1, true);
             this.drawPathTrail(this.pathAnim.path, this.pathAnim.progress);
         }
+
+        this.updateAndDrawTrailParticles();
 
         this.updateAnimations();
         this.selectedBounce += 0.14;
@@ -308,16 +320,37 @@ export class Renderer {
 
     private drawSceneParticles() {
         const ctx = this.ctx;
-        const t = this.animFrame * 0.01;
-        const count = 28;
+        // Speed multiplier based on combo level
+        const speedMult = this.comboLevel >= 3 ? 2.5 : this.comboLevel >= 2 ? 1.7 : 1;
+        const t = this.animFrame * 0.01 * speedMult;
+        const count = this.comboLevel >= 3 ? 40 : this.comboLevel >= 2 ? 34 : 28;
+
+        // Color based on combo level
+        let particleR: number, particleG: number, particleB: number;
+        if (this.comboLevel >= 3) {
+            // Red/orange for 3x+
+            particleR = 255;
+            particleG = 100;
+            particleB = 80;
+        } else if (this.comboLevel >= 2) {
+            // Yellow/gold for 2x
+            particleR = 255;
+            particleG = 220;
+            particleB = 100;
+        } else {
+            // Default cool blue/white
+            particleR = 174;
+            particleG = 219;
+            particleB = 255;
+        }
 
         for (let i = 0; i < count; i++) {
             const px = ((i * 139 + t * 240) % (this.boardSize + 90)) - 45;
             const py = ((i * 83 + t * 120 + Math.sin(i * 1.3 + t * 2) * 28) % (this.boardSize + 90)) - 45;
             const r = 1.8 + (i % 4) * 0.8;
             const glow = ctx.createRadialGradient(px, py, 0, px, py, r * 3);
-            glow.addColorStop(0, "rgba(174, 219, 255, 0.5)");
-            glow.addColorStop(1, "rgba(174, 219, 255, 0)");
+            glow.addColorStop(0, `rgba(${particleR}, ${particleG}, ${particleB}, 0.5)`);
+            glow.addColorStop(1, `rgba(${particleR}, ${particleG}, ${particleB}, 0)`);
             ctx.fillStyle = glow;
             ctx.beginPath();
             ctx.arc(px, py, r * 3, 0, Math.PI * 2);
@@ -364,12 +397,75 @@ export class Renderer {
         ctx.shadowBlur = 0;
     }
 
+    /** Emit a few sparkle particles at the moving cell's current position */
+    private emitTrailParticles(cx: number, cy: number, color: CellColor) {
+        const theme = color === JOKER_COLOR ? JOKER_THEME : CELL_THEMES[color % CELL_THEMES.length];
+        // Emit 1-2 particles per frame
+        const count = 1 + (this.animFrame % 2 === 0 ? 1 : 0);
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 0.3 + Math.random() * 0.8;
+            this.trailParticles.push({
+                x: cx + (Math.random() - 0.5) * 4,
+                y: cy + (Math.random() - 0.5) * 4,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                life: 1.0,
+                color: Math.random() > 0.4 ? theme.core : theme.membrane,
+            });
+        }
+    }
+
+    /** Update and render trail sparkle particles */
+    private updateAndDrawTrailParticles() {
+        const ctx = this.ctx;
+        const decay = 0.025;
+        for (let i = this.trailParticles.length - 1; i >= 0; i--) {
+            const p = this.trailParticles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vx *= 0.96;
+            p.vy *= 0.96;
+            p.life -= decay;
+            if (p.life <= 0) {
+                this.trailParticles.splice(i, 1);
+                continue;
+            }
+
+            const r = 1.5 + p.life * 2.5;
+            const alpha = p.life * 0.7;
+
+            // Soft glow
+            const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.5);
+            glow.addColorStop(0, p.color + this.alphaHex(alpha));
+            glow.addColorStop(1, p.color + "00");
+            ctx.fillStyle = glow;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, r * 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Bright core
+            ctx.fillStyle = `rgba(255,255,255,${alpha * 0.8})`;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, r * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    /** Convert 0..1 alpha to 2-char hex suffix */
+    private alphaHex(a: number): string {
+        return Math.round(Math.min(1, Math.max(0, a)) * 255)
+            .toString(16)
+            .padStart(2, "0");
+    }
+
     private updateAnimations() {
         let finished = false;
 
         if (this.pathAnim) {
             const segments = Math.max(1, this.pathAnim.path.length - 1);
-            this.pathAnim.progress += Math.min(0.11, 0.68 / segments);
+            // Slower movement: ~60% of original speed
+            this.pathAnim.progress += Math.min(0.065, 0.4 / segments);
             if (this.pathAnim.progress >= 1) {
                 this.pathAnim = null;
                 finished = true;

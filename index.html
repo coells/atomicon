@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>A-tom-i-con</title>
+        <title>a-tom-I-con</title>
         <style>
             * {
                 margin: 0;
@@ -106,7 +106,7 @@
                 flex-wrap: wrap;
                 align-items: center;
                 justify-content: center;
-                gap: 24px;
+                gap: 10px 16px;
                 margin-bottom: 6px;
                 user-select: none;
                 background: rgba(9, 15, 28, 0.62);
@@ -114,35 +114,36 @@
                 border-radius: 16px;
                 backdrop-filter: blur(10px);
                 box-shadow: 0 12px 30px rgba(4, 7, 16, 0.45);
-                padding: 12px 16px;
+                padding: 8px 12px;
+                position: relative;
             }
 
             #title {
-                font-size: clamp(26px, 4.5vw, 38px);
+                font-size: clamp(18px, 3.5vw, 28px);
                 font-weight: 800;
                 color: #d9fff2;
                 text-shadow:
                     0 0 18px rgba(127, 239, 206, 0.35),
                     0 0 32px rgba(107, 224, 255, 0.14);
-                letter-spacing: 3px;
+                letter-spacing: 2px;
             }
 
             .stat {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                min-width: 90px;
+                min-width: 48px;
             }
 
             .stat-label {
-                font-size: 11px;
+                font-size: 9px;
                 color: #7f97bb;
                 text-transform: uppercase;
-                letter-spacing: 1.2px;
+                letter-spacing: 1px;
             }
 
             .stat-value {
-                font-size: 24px;
+                font-size: 18px;
                 font-weight: 800;
                 color: #d6ebff;
             }
@@ -154,19 +155,53 @@
             }
 
             .next-dot {
-                width: 18px;
-                height: 18px;
+                width: 14px;
+                height: 14px;
                 border-radius: 50%;
-                border: 2px solid rgba(255, 255, 255, 0.2);
-                transition: opacity 0.2s;
-                box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.3);
+                border: 1.5px solid rgba(255, 255, 255, 0.2);
+                transition:
+                    opacity 0.2s,
+                    transform 0.25s;
+                box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.3);
+            }
+
+            .next-dot.hidden {
+                display: none;
+            }
+
+            #sound-toggle {
+                width: 32px;
+                height: 32px;
+                border-radius: 8px;
+                border: 1px solid rgba(127, 239, 206, 0.35);
+                background: rgba(127, 239, 206, 0.1);
+                color: #bff7e4;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 16px;
+                transition: all 0.2s;
+                padding: 0;
+                flex-shrink: 0;
+            }
+
+            #sound-toggle:hover {
+                background: rgba(127, 239, 206, 0.2);
+                border-color: rgba(127, 239, 206, 0.75);
+            }
+
+            #sound-toggle.off {
+                border-color: rgba(255, 146, 170, 0.4);
+                background: rgba(255, 120, 150, 0.14);
+                color: #ffd2de;
             }
 
             #board-wrap {
                 display: flex;
                 gap: 16px;
-                align-items: stretch;
-                width: min(1040px, 100%);
+                align-items: center;
+                width: min(760px, 100%);
                 justify-content: center;
             }
 
@@ -178,80 +213,6 @@
                     0 0 60px rgba(127, 239, 206, 0.08),
                     0 20px 60px rgba(0, 0, 0, 0.45),
                     inset 0 0 50px rgba(133, 192, 255, 0.08);
-            }
-
-            #side-panel {
-                width: min(220px, 30vw);
-                min-width: 180px;
-                background: rgba(10, 16, 30, 0.68);
-                border: 1px solid rgba(161, 190, 227, 0.2);
-                border-radius: 16px;
-                box-shadow: 0 12px 30px rgba(4, 7, 16, 0.45);
-                backdrop-filter: blur(8px);
-                padding: 14px;
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-            }
-
-            .panel-title {
-                font-size: 12px;
-                color: #92add2;
-                text-transform: uppercase;
-                letter-spacing: 1.3px;
-                margin-bottom: 4px;
-            }
-
-            #leaderboard {
-                list-style: none;
-                display: flex;
-                flex-direction: column;
-                gap: 6px;
-            }
-
-            #leaderboard li {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                font-size: 14px;
-                color: #c5d9f8;
-                padding: 6px 8px;
-                border-radius: 8px;
-                background: rgba(22, 34, 56, 0.55);
-                border: 1px solid rgba(160, 190, 230, 0.12);
-            }
-
-            #leaderboard li span:first-child {
-                color: #8fb0d8;
-            }
-
-            .controls {
-                display: flex;
-                gap: 8px;
-                flex-wrap: wrap;
-            }
-
-            .mini-btn {
-                padding: 7px 10px;
-                border: 1px solid rgba(127, 239, 206, 0.35);
-                background: rgba(127, 239, 206, 0.1);
-                color: #bff7e4;
-                border-radius: 8px;
-                font-size: 12px;
-                cursor: pointer;
-                transition: all 0.2s;
-                letter-spacing: 0.4px;
-            }
-
-            .mini-btn:hover {
-                background: rgba(127, 239, 206, 0.2);
-                border-color: rgba(127, 239, 206, 0.75);
-            }
-
-            .mini-btn.off {
-                border-color: rgba(255, 146, 170, 0.4);
-                background: rgba(255, 120, 150, 0.14);
-                color: #ffd2de;
             }
 
             #footer {
@@ -332,24 +293,13 @@
             #overlay button:hover {
                 background: rgba(127, 239, 206, 0.25);
             }
-
-            @media (max-width: 900px) {
-                #board-wrap {
-                    flex-direction: column;
-                    align-items: center;
-                }
-
-                #side-panel {
-                    width: min(640px, 100%);
-                }
-            }
         </style>
     </head>
     <body>
         <div id="bg-illustration"></div>
         <div id="app">
             <div id="header">
-                <div id="title">A-TOM-I-CON</div>
+                <div id="title">A-tom-I-con</div>
                 <div class="stat">
                     <span class="stat-label">Score</span>
                     <span class="stat-value" id="score">0</span>
@@ -368,47 +318,11 @@
                         <div class="next-dot" id="next4"></div>
                     </div>
                 </div>
-                <div class="stat">
-                    <span class="stat-label">Spawn</span>
-                    <span class="stat-value" id="difficulty">3 / turn</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Combo</span>
-                    <span class="stat-value" id="combo">-</span>
-                </div>
+                <button id="sound-toggle" title="Sound settings">🔊</button>
             </div>
 
             <div id="board-wrap">
                 <canvas id="game-canvas"></canvas>
-
-                <aside id="side-panel">
-                    <div>
-                        <div class="panel-title">Top Scores</div>
-                        <ol id="leaderboard">
-                            <li><span>#1</span><strong>0</strong></li>
-                            <li><span>#2</span><strong>0</strong></li>
-                            <li><span>#3</span><strong>0</strong></li>
-                            <li><span>#4</span><strong>0</strong></li>
-                            <li><span>#5</span><strong>0</strong></li>
-                        </ol>
-                    </div>
-
-                    <div>
-                        <div class="panel-title">Audio</div>
-                        <div class="controls">
-                            <button class="mini-btn" id="toggle-sfx-btn">SFX: ON</button>
-                            <button class="mini-btn" id="toggle-music-btn">Music: ON</button>
-                        </div>
-                    </div>
-
-                    <div>
-                        <div class="panel-title">Hint</div>
-                        <div style="font-size: 13px; color: #9ab4d8; line-height: 1.45">
-                            Match touching clusters of <strong>5+</strong> of the same species. Jokers adapt to any
-                            cluster.
-                        </div>
-                    </div>
-                </aside>
             </div>
 
             <div id="footer">
