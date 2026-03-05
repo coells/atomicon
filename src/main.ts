@@ -421,6 +421,102 @@ class SFX {
         });
     }
 
+    /** Celebration sound for big clears. tier: 1=6 cells, 2=7 cells, 3=8+ cells */
+    celebration(tier: number) {
+        if (!this.sfxEnabled) return;
+        const ctx = this.ensure();
+        const now = ctx.currentTime;
+
+        if (tier === 1) {
+            // Bright ascending sparkle: pentatonic run
+            const notes = [784, 880, 1047, 1175, 1319];
+            notes.forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = "sine";
+                osc.frequency.value = freq;
+                const t = now + i * 0.06;
+                gain.gain.setValueAtTime(0.0001, t);
+                gain.gain.exponentialRampToValueAtTime(0.12, t + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+                osc.start(t);
+                osc.stop(t + 0.3);
+            });
+        } else if (tier === 2) {
+            // Richer cascade with shimmer
+            const notes = [659, 784, 988, 1175, 1319, 1568];
+            notes.forEach((freq, i) => {
+                for (const detune of [-6, 0, 6]) {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.type = detune === 0 ? "sine" : "triangle";
+                    osc.frequency.value = freq;
+                    osc.detune.value = detune;
+                    const t = now + i * 0.055;
+                    const vol = detune === 0 ? 0.13 : 0.04;
+                    gain.gain.setValueAtTime(0.0001, t);
+                    gain.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+                    osc.start(t);
+                    osc.stop(t + 0.4);
+                }
+            });
+        } else {
+            // Epic fanfare: chord burst + ascending run + shimmer tail
+            // Initial chord burst
+            const chordFreqs = [523, 659, 784, 1047];
+            chordFreqs.forEach((freq) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = "sine";
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0.0001, now);
+                gain.gain.exponentialRampToValueAtTime(0.1, now + 0.015);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+                osc.start(now);
+                osc.stop(now + 0.55);
+            });
+            // Ascending sparkle run
+            const runNotes = [784, 988, 1175, 1319, 1568, 1760, 2093];
+            runNotes.forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = "sine";
+                osc.frequency.value = freq;
+                const t = now + 0.1 + i * 0.05;
+                gain.gain.setValueAtTime(0.0001, t);
+                gain.gain.exponentialRampToValueAtTime(0.11, t + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+                osc.start(t);
+                osc.stop(t + 0.35);
+            });
+            // Shimmer tail
+            for (let i = 0; i < 4; i++) {
+                const freq = 1568 + Math.random() * 800;
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = "triangle";
+                osc.frequency.value = freq;
+                const t = now + 0.45 + i * 0.08;
+                gain.gain.setValueAtTime(0.0001, t);
+                gain.gain.exponentialRampToValueAtTime(0.05, t + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+                osc.start(t);
+                osc.stop(t + 0.55);
+            }
+        }
+    }
+
     error() {
         if (!this.sfxEnabled) return;
         const ctx = this.ensure();
@@ -767,6 +863,7 @@ class AtomiconGame {
                 this.pendingLineCount = lineCount;
                 this.phase = Phase.REMOVE_ANIM;
                 this.renderer.startRemoveAnimation(toRemove);
+                this.triggerCelebration(toRemove);
                 if (this.combo > 1) {
                     this.sfx.combo();
                     this.setMessage(`Combo x${this.combo}! +${turnScore}`);
@@ -818,6 +915,7 @@ class AtomiconGame {
                 this.pendingRemove = toRemove;
                 this.phase = Phase.REMOVE_ANIM;
                 this.renderer.startRemoveAnimation(toRemove);
+                this.triggerCelebration(toRemove);
                 if (this.combo > 1) {
                     this.sfx.combo();
                     this.setMessage(`Chain combo x${this.combo}! +${turnScore}`);
@@ -840,6 +938,20 @@ class AtomiconGame {
             this.setMessage("Select a cell to move");
             this.updateUI();
             return;
+        }
+    }
+
+    /** Trigger celebration effects when clearing 6+ cells */
+    private triggerCelebration(toRemove: Set<string>) {
+        if (toRemove.size >= 8) {
+            this.renderer.startCelebration(toRemove, 3);
+            this.sfx.celebration(3);
+        } else if (toRemove.size >= 7) {
+            this.renderer.startCelebration(toRemove, 2);
+            this.sfx.celebration(2);
+        } else if (toRemove.size >= 6) {
+            this.renderer.startCelebration(toRemove, 1);
+            this.sfx.celebration(1);
         }
     }
 

@@ -99,6 +99,21 @@ export class Renderer {
     /** Trail particles emitted during path movement */
     private trailParticles: { x: number; y: number; vx: number; vy: number; life: number; color: string }[] = [];
 
+    /** Celebration particles for big clears */
+    private celebrationParticles: {
+        x: number;
+        y: number;
+        vx: number;
+        vy: number;
+        life: number;
+        maxLife: number;
+        color: string;
+        size: number;
+        type: "spark" | "ring" | "star";
+    }[] = [];
+    private screenShake = 0;
+    private flashAlpha = 0;
+
     private comboLevel = 0; // 0 = no combo, 2 = 2x, 3 = 3x, etc.
 
     /** Ambient particle color cycling (independent of combo) */
@@ -252,6 +267,80 @@ export class Renderer {
         this.removeAnim = { positions, progress: 0 };
     }
 
+    /**
+     * Start a celebration effect.
+     * @param positions  Set of position keys being cleared
+     * @param tier  1 = 6 cells, 2 = 7 cells, 3 = 8+ cells
+     */
+    startCelebration(positions: Set<string>, tier: number) {
+        // Collect center positions of cleared cells
+        const origins: { x: number; y: number }[] = [];
+        for (const k of positions) {
+            const c = this.centers.get(k);
+            if (c) origins.push(c);
+        }
+        if (origins.length === 0) return;
+
+        // Center of mass
+        const cx = origins.reduce((s, p) => s + p.x, 0) / origins.length;
+        const cy = origins.reduce((s, p) => s + p.y, 0) / origins.length;
+
+        const particleCount = tier === 1 ? 35 : tier === 2 ? 65 : 120;
+        const speedBase = tier === 1 ? 2.5 : tier === 2 ? 4 : 6;
+        const palette = CELL_THEMES.map((t) => t.core).concat(["#FFFFFF", "#FFE87C"]);
+
+        for (let i = 0; i < particleCount; i++) {
+            // Emit from random cleared cells or center
+            const origin = Math.random() > 0.4 ? origins[Math.floor(Math.random() * origins.length)] : { x: cx, y: cy };
+            const angle = Math.random() * Math.PI * 2;
+            const speed = (speedBase * 0.4 + Math.random() * speedBase) * (tier >= 3 ? 1.2 : 1);
+            const life = 0.6 + Math.random() * (tier >= 3 ? 1.2 : tier >= 2 ? 0.9 : 0.6);
+            const type =
+                tier >= 3 && Math.random() > 0.7 ? "star" : tier >= 2 && Math.random() > 0.8 ? "ring" : "spark";
+            this.celebrationParticles.push({
+                x: origin.x + (Math.random() - 0.5) * 8,
+                y: origin.y + (Math.random() - 0.5) * 8,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed - (tier >= 2 ? 1.5 : 0),
+                life,
+                maxLife: life,
+                color: palette[Math.floor(Math.random() * palette.length)],
+                size: 2 + Math.random() * (tier >= 3 ? 5 : tier >= 2 ? 3.5 : 2),
+                type,
+            });
+        }
+
+        // Expanding ring particles for tier 2+
+        if (tier >= 2) {
+            const ringCount = tier >= 3 ? 3 : 1;
+            for (let r = 0; r < ringCount; r++) {
+                const segments = 24;
+                for (let i = 0; i < segments; i++) {
+                    const angle = (i / segments) * Math.PI * 2;
+                    const speed = (3 + r * 2) * (tier >= 3 ? 1.5 : 1);
+                    this.celebrationParticles.push({
+                        x: cx,
+                        y: cy,
+                        vx: Math.cos(angle) * speed,
+                        vy: Math.sin(angle) * speed,
+                        life: 0.5 + r * 0.15,
+                        maxLife: 0.5 + r * 0.15,
+                        color: "#FFFFFF",
+                        size: 1.5,
+                        type: "ring",
+                    });
+                }
+            }
+        }
+
+        // Screen flash
+        this.flashAlpha = tier >= 3 ? 0.35 : tier >= 2 ? 0.2 : 0.1;
+
+        // Screen shake for tier 3
+        if (tier >= 3) this.screenShake = 8;
+        else if (tier >= 2) this.screenShake = 3;
+    }
+
     isAnimating(): boolean {
         return !!(this.pathAnim || this.spawnAnim || this.removeAnim);
     }
@@ -259,6 +348,16 @@ export class Renderer {
     draw(grid: Grid) {
         this.animFrame++;
         const ctx = this.ctx;
+
+        // Screen shake offset
+        ctx.save();
+        if (this.screenShake > 0.1) {
+            const sx = (Math.random() - 0.5) * this.screenShake * 2;
+            const sy = (Math.random() - 0.5) * this.screenShake * 2;
+            ctx.translate(sx, sy);
+            this.screenShake *= 0.88;
+            if (this.screenShake < 0.1) this.screenShake = 0;
+        }
 
         const bg = ctx.createRadialGradient(
             this.boardSize * 0.5,
@@ -331,9 +430,19 @@ export class Renderer {
         }
 
         this.updateAndDrawTrailParticles();
+        this.updateAndDrawCelebrationParticles();
+
+        // Flash overlay
+        if (this.flashAlpha > 0.005) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${this.flashAlpha})`;
+            ctx.fillRect(-20, -20, this.boardSize + 40, this.boardSize + 40);
+            this.flashAlpha *= 0.88;
+            if (this.flashAlpha < 0.005) this.flashAlpha = 0;
+        }
 
         this.updateAnimations();
         this.selectedBounce += 0.14;
+        ctx.restore(); // end screen shake
     }
 
     /** Advance ambient color cycling timer */
@@ -510,6 +619,76 @@ export class Renderer {
             ctx.beginPath();
             ctx.arc(p.x, p.y, r * 0.5, 0, Math.PI * 2);
             ctx.fill();
+        }
+    }
+
+    /** Update and render celebration particles */
+    private updateAndDrawCelebrationParticles() {
+        const ctx = this.ctx;
+        for (let i = this.celebrationParticles.length - 1; i >= 0; i--) {
+            const p = this.celebrationParticles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += 0.06; // gravity
+            p.vx *= 0.985;
+            p.vy *= 0.985;
+            p.life -= 0.016;
+            if (p.life <= 0) {
+                this.celebrationParticles.splice(i, 1);
+                continue;
+            }
+
+            const t = p.life / p.maxLife; // 1 → 0
+            const alpha = t > 0.3 ? 1 : t / 0.3; // fade out in last 30%
+
+            if (p.type === "star") {
+                // Draw a small 4-point star
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.life * 8);
+                ctx.globalAlpha = alpha;
+                const s = p.size * (0.5 + t * 0.5);
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                for (let j = 0; j < 8; j++) {
+                    const a = (j / 8) * Math.PI * 2;
+                    const rr = j % 2 === 0 ? s : s * 0.4;
+                    if (j === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+                    else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+                }
+                ctx.closePath();
+                ctx.fill();
+                // glow
+                ctx.shadowBlur = s * 3;
+                ctx.shadowColor = p.color;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            } else if (p.type === "ring") {
+                ctx.globalAlpha = alpha * 0.6;
+                ctx.strokeStyle = p.color;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * (1 - t) * 3 + 1, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            } else {
+                // spark
+                const r = p.size * (0.3 + t * 0.7);
+                // Outer glow
+                const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 3);
+                glow.addColorStop(0, p.color + this.alphaHex(alpha * 0.8));
+                glow.addColorStop(1, p.color + "00");
+                ctx.fillStyle = glow;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
+                ctx.fill();
+                // Bright core
+                ctx.fillStyle = `rgba(255,255,255,${alpha * 0.9})`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, r * 0.6, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
     }
 
