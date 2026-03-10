@@ -648,9 +648,16 @@ class AtomiconGame {
         this.soundToggleBtn.addEventListener("click", () => this.cycleSoundMode());
         window.addEventListener("keydown", (e) => this.handleHotkeys(e));
 
-        window.addEventListener("resize", () => {
-            this.renderer.resize();
-        });
+        let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+        const scheduleResize = (delay = 150) => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => this.renderer.resize(), delay);
+        };
+        window.addEventListener("resize", () => scheduleResize());
+        window.addEventListener("orientationchange", () => scheduleResize(300));
+        if (window.visualViewport) {
+            window.visualViewport.addEventListener("resize", () => scheduleResize());
+        }
 
         // Animation completion callback
         this.renderer.onAnimationComplete = () => this.onAnimComplete();

@@ -161,7 +161,7 @@ export class Renderer {
 
     resize() {
         const dpr = window.devicePixelRatio || 1;
-        const maxSize = Math.min(window.innerWidth - 32, window.innerHeight - 190, 760);
+        const maxSize = Math.max(200, Math.min(window.innerWidth - 32, window.innerHeight - 190, 760));
         this.boardSize = maxSize;
 
         this.canvas.style.width = `${maxSize}px`;
@@ -200,6 +200,13 @@ export class Renderer {
     }
 
     getCellFromPixel(x: number, y: number): Position | null {
+        // Scale from bounding-rect pixel space to board coordinate space
+        // (handles pinch-to-zoom, CSS transforms, and DPR mismatches)
+        const rect = this.canvas.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            x *= this.boardSize / rect.width;
+            y *= this.boardSize / rect.height;
+        }
         for (const pos of this.validPositions) {
             const center = this.centers.get(this.posKey(pos));
             if (!center) continue;
