@@ -6,7 +6,6 @@ import {
     generateNextColors,
     getSpawnCount,
     hasAnyMove,
-    isBoardFull,
     PREVIEW_SIZE,
     removeMatches,
     spawnCells,
@@ -45,6 +44,7 @@ class SFX {
     private reverbReturn: ConvolverNode | null = null;
     private masterGain: GainNode | null = null;
     private compressor: DynamicsCompressorNode | null = null;
+    private teardownTimer: ReturnType<typeof setTimeout> | null = null;
     private harmStep = 0;
     private melodyPos = 0;
     private activeNodes: { osc: OscillatorNode; stop: number }[] = [];
@@ -87,9 +87,16 @@ class SFX {
     }
 
     async unlock() {
+        // Never wake the audio pipeline while fully muted — a running (silent)
+        // AudioContext keeps the OS audio hardware active and drains battery.
+        if (!this.sfxEnabled && !this.musicEnabled) return;
         const ctx = this.ensure();
         if (ctx.state === "suspended") {
             await ctx.resume();
+            // A chord skipped while the context was suspended (autoplay policy
+            // at boot, or the mode-cycle suspend) is replayed now that we can
+            // actually be heard.
+            if (this.musicRunning) this.playChord();
         }
     }
 
@@ -105,14 +112,6 @@ class SFX {
             return;
         }
         this.startMusic();
-    }
-
-    getSfxEnabled() {
-        return this.sfxEnabled;
-    }
-
-    getMusicEnabled() {
-        return this.musicEnabled;
     }
 
     /**
@@ -145,6 +144,14 @@ class SFX {
 
     startMusic() {
         if (!this.musicEnabled || this.musicRunning) return;
+        // A quick stop→start leaves a pending teardown aimed at the fields
+        // we're about to replace — run it now instead of letting it fire later
+        // and silence the new session.
+        if (this.teardownTimer !== null) {
+            clearTimeout(this.teardownTimer);
+            this.teardownTimer = null;
+            this.teardownBus();
+        }
         this.musicRunning = true;
         const ctx = this.ensure();
         const now = ctx.currentTime;
@@ -208,24 +215,31 @@ class SFX {
         }
         this.clearTimers();
 
-        setTimeout(() => {
-            for (const n of this.activeNodes) {
-                try {
-                    n.osc.stop();
-                } catch {}
-            }
-            this.activeNodes = [];
-            // Disconnect the whole music bus — an idle convolver still burns CPU
-            this.reverbSend?.disconnect();
-            this.reverbReturn?.disconnect();
-            this.masterGain?.disconnect();
-            this.compressor?.disconnect();
-            this.reverbSend = null;
-            this.reverbReturn = null;
-            this.masterGain = null;
-            this.compressor = null;
+        // Tear down after the fade; startMusic() cancels this if music restarts first.
+        if (this.teardownTimer !== null) clearTimeout(this.teardownTimer);
+        this.teardownTimer = setTimeout(() => {
+            this.teardownTimer = null;
+            this.teardownBus();
             this.maybeSuspend();
         }, 2000);
+    }
+
+    private teardownBus() {
+        for (const n of this.activeNodes) {
+            try {
+                n.osc.stop();
+            } catch {}
+        }
+        this.activeNodes = [];
+        // Disconnect the whole music bus — an idle convolver still burns CPU
+        this.reverbSend?.disconnect();
+        this.reverbReturn?.disconnect();
+        this.masterGain?.disconnect();
+        this.compressor?.disconnect();
+        this.reverbSend = null;
+        this.reverbReturn = null;
+        this.masterGain = null;
+        this.compressor = null;
     }
 
     /* ── reverb impulse ── */
@@ -506,7 +520,7 @@ class AtomiconGame {
     private moveCount = 0;
     private best: number;
     private nextColors: CellColor[] = [];
-    private pendingRemove: Set<string> | null = null;
+    private pendingRemove: Set<number> | null = null;
     private soundMode: SoundMode = 3;
     private lastFrame = 0;
 
@@ -706,10 +720,7 @@ class AtomiconGame {
         if (this.phase !== Phase.SELECT) return;
         void this.sfx.unlock().then(() => this.sfx.startMusic());
 
-        const rect = this.renderer.getCanvas().getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const pos = this.renderer.getCellFromPixel(x, y);
+        const pos = this.renderer.getCellFromPixel(e.clientX, e.clientY);
         if (!pos) return;
 
         const cellColor = this.grid[pos.row][pos.col].color;
@@ -811,7 +822,7 @@ class AtomiconGame {
 
             case Phase.SPAWN_ANIM:
                 if (this.handleClears("Chain combo")) return;
-                if (isBoardFull(this.grid) || !hasAnyMove(this.grid)) {
+                if (!hasAnyMove(this.grid)) {
                     this.gameOver();
                     return;
                 }
@@ -827,7 +838,7 @@ class AtomiconGame {
     }
 
     /** Trigger celebration effects when clearing 6+ cells */
-    private triggerCelebration(toRemove: Set<string>) {
+    private triggerCelebration(toRemove: Set<number>) {
         const tier = toRemove.size >= 8 ? 3 : toRemove.size >= 7 ? 2 : toRemove.size >= 6 ? 1 : 0;
         if (tier > 0) {
             this.renderer.startCelebration(toRemove, tier);
@@ -893,7 +904,10 @@ class AtomiconGame {
         if (this.phase === Phase.GAME_OVER && !this.renderer.isBusy()) return;
         const interval = this.renderer.isBusy() ? BUSY_FRAME_MS : IDLE_FRAME_MS;
         if (now - this.lastFrame < interval - 2) return;
-        this.lastFrame = now;
+        // Credit a full interval rather than resetting to now: resetting
+        // discards the remainder each draw, which locks 90/144Hz displays to
+        // 45/48fps. The clamp stops a catch-up burst after a hidden-tab gap.
+        this.lastFrame = Math.max(this.lastFrame + interval, now - interval);
         this.renderer.draw(this.grid, now);
     };
 }

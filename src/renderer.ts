@@ -1,5 +1,6 @@
 import {
     ALL_VALID_POSITIONS,
+    cellIndex,
     GRID_SIZE,
     HEX_RADIUS,
     JOKER_COLOR,
@@ -27,6 +28,17 @@ const BOARD_PADDING = 30;
 const PHASE_STEPS = 16;
 const T_RATE = 0.04 * 60; // time-units per second (the old animFrame * 0.04 at 60fps)
 const STEP_T = 0.5; // time-units per sprite phase (~208ms per step at T_RATE)
+
+/* Sprite-painter angular frequencies. The phase loop wraps every
+ * PHASE_STEPS * STEP_T = 8 time-units, so every sin() a painter uses must be
+ * periodic in 8 — i.e. its frequency must be a multiple of 2π/8 — or the pose
+ * snaps at each wrap. W1 sweeps exactly one full circle per cycle, which also
+ * guarantees threshold effects (blinks) trigger once per cycle at every board
+ * size regardless of their phase offset. */
+const W1 = (2 * Math.PI) / (PHASE_STEPS * STEP_T);
+const W2 = W1 * 2;
+const W3 = W1 * 3;
+const W4 = W1 * 4;
 const PARTICLE_T_RATE = 0.01 * 60; // ambient-particle time-units per second
 export const FRAME_MS = 1000 / 60;
 const MAX_DPR = 2; // dpr 3 costs 2.25x the fill work of dpr 2 for no visible gain on a game board
@@ -114,9 +126,12 @@ export class Renderer {
     private dtF = 1; // delta time in 60fps-frame units
     private globalStep = 0;
 
-    /* cached rendering layers/sprites — invalidated on resize */
-    private boardLayer: HTMLCanvasElement | null = null;
+    /* cached rendering layers/sprites — size-dependent ones rebuilt on resize */
+    private bgLayer: HTMLCanvasElement | null = null;
+    private tileLayer: HTMLCanvasElement | null = null;
     private spriteCache = new Map<number, HTMLCanvasElement>();
+    private jokerSprites: { glow: HTMLCanvasElement; body: HTMLCanvasElement; star: HTMLCanvasElement; shimmer: HTMLCanvasElement } | null = null;
+    /* fixed 64px sprites — size-independent, never invalidated */
     private glowSpriteCache = new Map<string, HTMLCanvasElement>();
     private ambientSprite: HTMLCanvasElement | null = null;
     private ambientSpriteKey = "";
@@ -124,8 +139,8 @@ export class Renderer {
     private selectedPos: Position | null = null;
     private selectedBounce = 0;
     private pathAnim: { path: Position[]; progress: number; color: CellColor } | null = null;
-    private spawnAnim: { keys: Set<string>; progress: number } | null = null;
-    private removeAnim: { positions: Set<string>; progress: number } | null = null;
+    private spawnAnim: { keys: Set<number>; progress: number } | null = null;
+    private removeAnim: { positions: Set<number>; progress: number } | null = null;
 
     /** Trail particles emitted during path movement */
     private trailParticles: { x: number; y: number; vx: number; vy: number; life: number; color: string }[] = [];
@@ -177,12 +192,8 @@ export class Renderer {
         this.resize();
     }
 
-    private posKey(pos: Position): string {
-        return `${pos.row},${pos.col}`;
-    }
-
     private centerOf(pos: Position): { x: number; y: number } {
-        return this.centers[pos.row * GRID_SIZE + pos.col]!;
+        return this.centers[cellIndex(pos)]!;
     }
 
     private axial(pos: Position): { q: number; r: number } {
@@ -234,26 +245,31 @@ export class Renderer {
             const u = this.unitCenter(pos);
             const x = boardCenterX + (u.x - unitMidX) * this.hexRadius;
             const y = boardCenterY + (u.y - unitMidY) * this.hexRadius;
-            this.centers[pos.row * GRID_SIZE + pos.col] = { x, y };
+            this.centers[cellIndex(pos)] = { x, y };
         }
 
-        // Size-dependent caches must be rebuilt
+        // Size-dependent caches must be rebuilt (the 64px glow/ambient sprites
+        // are size-independent and survive resizes).
         this.spriteCache.clear();
-        this.glowSpriteCache.clear();
-        this.ambientSpriteKey = "";
-        this.buildBoardLayer();
+        this.jokerSprites = null;
+        this.buildBoardLayers();
     }
 
-    /** Pre-render the static background + hex tiles once; per frame it's a single blit. */
-    private buildBoardLayer() {
-        if (!this.boardLayer) this.boardLayer = document.createElement("canvas");
-        const layer = this.boardLayer;
-        layer.width = Math.round(this.boardSize * this.dpr);
-        layer.height = Math.round(this.boardSize * this.dpr);
-        const ctx = layer.getContext("2d")!;
-        ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    /**
+     * Pre-render the static board into two layers: background gradient and hex
+     * tiles. Two layers (not one) so the ambient particles can be drawn between
+     * them — dimly shimmering through the 86%-opaque tiles, as when the board
+     * was vector-painted per frame — while still costing only two blits.
+     */
+    private buildBoardLayers() {
+        const px = Math.round(this.boardSize * this.dpr);
+        if (!this.bgLayer) this.bgLayer = document.createElement("canvas");
+        this.bgLayer.width = px;
+        this.bgLayer.height = px;
+        const bctx = this.bgLayer.getContext("2d")!;
+        bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
-        const bg = ctx.createRadialGradient(
+        const bg = bctx.createRadialGradient(
             this.boardSize * 0.5,
             this.boardSize * 0.45,
             20,
@@ -264,30 +280,38 @@ export class Renderer {
         bg.addColorStop(0, "#132235");
         bg.addColorStop(0.65, "#0f1728");
         bg.addColorStop(1, "#090d18");
-        ctx.fillStyle = bg;
-        ctx.fillRect(0, 0, this.boardSize, this.boardSize);
+        bctx.fillStyle = bg;
+        bctx.fillRect(0, 0, this.boardSize, this.boardSize);
+
+        if (!this.tileLayer) this.tileLayer = document.createElement("canvas");
+        this.tileLayer.width = px;
+        this.tileLayer.height = px;
+        const tctx = this.tileLayer.getContext("2d")!;
+        tctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
         for (const pos of this.validPositions) {
             const center = this.centerOf(pos);
 
-            this.traceHex(ctx, center.x, center.y, this.hexRadius * 0.92);
-            ctx.fillStyle = "rgba(13, 24, 41, 0.86)";
-            ctx.fill();
-            ctx.strokeStyle = "rgba(145, 176, 220, 0.09)";
-            ctx.lineWidth = 1;
-            ctx.stroke();
+            this.traceHex(tctx, center.x, center.y, this.hexRadius * 0.92);
+            tctx.fillStyle = "rgba(13, 24, 41, 0.86)";
+            tctx.fill();
+            tctx.strokeStyle = "rgba(145, 176, 220, 0.09)";
+            tctx.lineWidth = 1;
+            tctx.stroke();
 
-            this.traceHex(ctx, center.x, center.y, this.hexRadius * 0.5);
-            ctx.strokeStyle = "rgba(95, 130, 180, 0.06)";
-            ctx.lineWidth = 0.7;
-            ctx.stroke();
+            this.traceHex(tctx, center.x, center.y, this.hexRadius * 0.5);
+            tctx.strokeStyle = "rgba(95, 130, 180, 0.06)";
+            tctx.lineWidth = 0.7;
+            tctx.stroke();
         }
     }
 
-    getCellFromPixel(x: number, y: number): Position | null {
-        // Scale from bounding-rect pixel space to board coordinate space
-        // (handles pinch-to-zoom, CSS transforms, and DPR mismatches)
+    getCellFromPixel(clientX: number, clientY: number): Position | null {
+        // Scale from client space to board coordinate space (handles
+        // pinch-to-zoom, CSS transforms, and DPR mismatches)
         const rect = this.canvas.getBoundingClientRect();
+        let x = clientX - rect.left;
+        let y = clientY - rect.top;
         if (rect.width > 0 && rect.height > 0) {
             x *= this.boardSize / rect.width;
             y *= this.boardSize / rect.height;
@@ -336,24 +360,23 @@ export class Renderer {
     }
 
     startSpawnAnimation(positions: Position[]) {
-        this.spawnAnim = { keys: new Set(positions.map((p) => this.posKey(p))), progress: 0 };
+        this.spawnAnim = { keys: new Set(positions.map(cellIndex)), progress: 0 };
     }
 
-    startRemoveAnimation(positions: Set<string>) {
+    startRemoveAnimation(positions: Set<number>) {
         this.removeAnim = { positions, progress: 0 };
     }
 
     /**
      * Start a celebration effect.
-     * @param positions  Set of position keys being cleared
+     * @param positions  Set of cell indices being cleared
      * @param tier  1 = 6 cells, 2 = 7 cells, 3 = 8+ cells
      */
-    startCelebration(positions: Set<string>, tier: number) {
+    startCelebration(positions: Set<number>, tier: number) {
         // Collect center positions of cleared cells
         const origins: { x: number; y: number }[] = [];
         for (const k of positions) {
-            const [row, col] = k.split(",").map(Number);
-            const c = this.centers[row * GRID_SIZE + col];
+            const c = this.centers[k];
             if (c) origins.push(c);
         }
         if (origins.length === 0) return;
@@ -455,10 +478,12 @@ export class Renderer {
             if (this.screenShake < 0.1) this.screenShake = 0;
         }
 
-        // Static background + hex tiles: one blit
-        ctx.drawImage(this.boardLayer!, 0, 0, this.boardSize, this.boardSize);
-
+        // Static board, two blits with the ambient particles sandwiched between:
+        // they shimmer dimly through the 86%-opaque tiles instead of floating
+        // over the board.
+        ctx.drawImage(this.bgLayer!, 0, 0, this.boardSize, this.boardSize);
         this.drawSceneParticles(dtMs, now);
+        ctx.drawImage(this.tileLayer!, 0, 0, this.boardSize, this.boardSize);
 
         const pathDest = this.pathAnim ? this.pathAnim.path[this.pathAnim.path.length - 1] : null;
 
@@ -466,10 +491,11 @@ export class Renderer {
             const color = grid[pos.row][pos.col].color;
             if (color < 0) continue;
 
-            const center = this.centerOf(pos);
-            const seed = (pos.row * 3 + pos.col * 5) % PHASE_STEPS;
+            const idx = cellIndex(pos);
+            const center = this.centers[idx]!;
+            const seed = idx % PHASE_STEPS;
 
-            if (this.removeAnim && this.removeAnim.positions.has(this.posKey(pos))) {
+            if (this.removeAnim && this.removeAnim.positions.has(idx)) {
                 this.drawMicroCell(
                     center.x,
                     center.y,
@@ -484,7 +510,7 @@ export class Renderer {
 
             if (pathDest && pathDest.row === pos.row && pathDest.col === pos.col) continue;
 
-            if (this.spawnAnim && this.spawnAnim.keys.has(this.posKey(pos))) {
+            if (this.spawnAnim && this.spawnAnim.keys.has(idx)) {
                 this.drawMicroCell(center.x, center.y, color, this.spawnAnim.progress, this.spawnAnim.progress, false, seed);
                 continue;
             }
@@ -751,8 +777,13 @@ export class Renderer {
                 ctx.save();
                 ctx.translate(p.x, p.y);
                 ctx.rotate(p.life * 8);
-                ctx.globalAlpha = alpha;
                 const s = p.size * (0.5 + t * 0.5);
+                // Soft glow behind the star (cached sprite instead of shadowBlur —
+                // the only remaining per-frame Gaussian blur was here)
+                const glowR = s * 3;
+                ctx.globalAlpha = alpha * 0.8;
+                ctx.drawImage(this.getGlowSprite(p.color), -glowR, -glowR, glowR * 2, glowR * 2);
+                ctx.globalAlpha = alpha;
                 ctx.fillStyle = p.color;
                 ctx.beginPath();
                 for (let j = 0; j < 8; j++) {
@@ -763,11 +794,6 @@ export class Renderer {
                 }
                 ctx.closePath();
                 ctx.fill();
-                // glow
-                ctx.shadowBlur = s * 3;
-                ctx.shadowColor = p.color;
-                ctx.fill();
-                ctx.shadowBlur = 0;
                 ctx.restore();
             } else if (p.type === "ring") {
                 ctx.globalAlpha = alpha * 0.6;
@@ -926,10 +952,7 @@ export class Renderer {
         ctx.globalAlpha = alpha;
 
         if (color === JOKER_COLOR) {
-            // Jokers are rare and spin continuously — draw them live so the
-            // rotation stays smooth.
-            this.drawGlow(ctx, cx, cy, radius, JOKER_THEME);
-            this.drawJokerCharacter(ctx, cx, cy, radius, JOKER_THEME, this.timeT);
+            this.drawJoker(ctx, cx, cy, radius, this.timeT);
         } else {
             const step = (this.globalStep + phaseSeed) % PHASE_STEPS;
             const sprite = this.getSprite(color, step);
@@ -939,17 +962,15 @@ export class Renderer {
 
         if (selected) {
             const theme = color === JOKER_COLOR ? JOKER_THEME : CELL_THEMES[color % CELL_THEMES.length];
-            // Two strokes fake the old shadowBlur halo at a fraction of the cost
+            // Two strokes of one path fake the old shadowBlur halo at a fraction of the cost
             ctx.strokeStyle = theme.core;
-            ctx.globalAlpha = alpha * 0.35;
-            ctx.lineWidth = 6;
             ctx.beginPath();
             ctx.arc(cx, cy, radius + 5, 0, Math.PI * 2);
+            ctx.globalAlpha = alpha * 0.35;
+            ctx.lineWidth = 6;
             ctx.stroke();
             ctx.globalAlpha = alpha;
             ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(cx, cy, radius + 5, 0, Math.PI * 2);
             ctx.stroke();
         }
 
@@ -984,9 +1005,9 @@ export class Renderer {
 
     /* ── 0  CAT (Red) ── */
     private drawCat(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, theme: CellTheme, t: number) {
-        const blink = Math.sin(t * 0.35 + cx * 0.04) > 0.92 ? 0.15 : 1;
-        const earW = Math.sin(t * 2.1) * 0.06;
-        const whisk = Math.sin(t * 1.8) * r * 0.04;
+        const blink = Math.sin(t * W1 + cx * 0.04) > 0.92 ? 0.15 : 1;
+        const earW = Math.sin(t * W3) * 0.06;
+        const whisk = Math.sin(t * W2) * r * 0.04;
 
         this.drawBodyCircle(ctx, cx, cy, r, theme);
 
@@ -1063,9 +1084,9 @@ export class Renderer {
 
     /* ── 1  FISH (Blue) ── */
     private drawFish(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, theme: CellTheme, t: number) {
-        const blink = Math.sin(t * 0.3 + cy * 0.05) > 0.93 ? 0.2 : 1;
-        const wig = Math.sin(t * 2.5) * r * 0.03;
-        const tailW = Math.sin(t * 3) * 0.25;
+        const blink = Math.sin(t * W1 + cy * 0.05) > 0.93 ? 0.2 : 1;
+        const wig = Math.sin(t * W3) * r * 0.03;
+        const tailW = Math.sin(t * W4) * 0.25;
 
         // oval body
         const g = ctx.createRadialGradient(cx - r * 0.15, cy - r * 0.2, r * 0.1, cx, cy, r);
@@ -1130,10 +1151,10 @@ export class Renderer {
         // bubbles
         ctx.strokeStyle = "rgba(200,230,255,0.5)";
         ctx.lineWidth = r * 0.03;
-        const bt = t * 1.5;
+        const bt = t * 1.5; // rises (bt mod 3): period 2 in t, 4 loops per 8-unit phase cycle — wrap-safe
         for (let i = 0; i < 3; i++) {
             const by = cy - r * 0.4 - ((bt + i * 1.2) % 3) * r * 0.3;
-            const bx = cx + r * 0.8 + Math.sin(bt * 0.7 + i) * r * 0.1;
+            const bx = cx + r * 0.8 + Math.sin(t * W1 + i) * r * 0.1;
             ctx.beginPath();
             ctx.arc(bx, by, r * (0.04 + i * 0.02), 0, Math.PI * 2);
             ctx.stroke();
@@ -1142,9 +1163,9 @@ export class Renderer {
 
     /* ── 2  FROG (Green) ── */
     private drawFrog(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, theme: CellTheme, t: number) {
-        const blL = Math.sin(t * 0.33 + cx * 0.03) > 0.9 ? 0.15 : 1;
-        const blR = Math.sin(t * 0.33 + cx * 0.03 + 0.5) > 0.93 ? 0.15 : 1;
-        const throat = Math.sin(t * 1.2) * r * 0.04;
+        const blL = Math.sin(t * W1 + cx * 0.03) > 0.9 ? 0.15 : 1;
+        const blR = Math.sin(t * W1 + cx * 0.03 + 0.5) > 0.93 ? 0.15 : 1;
+        const throat = Math.sin(t * W2) * r * 0.04;
 
         this.drawBodyCircle(ctx, cx, cy + r * 0.08, r * 0.95, theme);
 
@@ -1201,8 +1222,8 @@ export class Renderer {
 
     /* ── 3  FOX (Orange) ── */
     private drawFox(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, theme: CellTheme, t: number) {
-        const blink = Math.sin(t * 0.32 + cy * 0.04) > 0.91 ? 0.15 : 1;
-        const earF = Math.sin(t * 1.9) * 0.04;
+        const blink = Math.sin(t * W1 + cy * 0.04) > 0.91 ? 0.15 : 1;
+        const earF = Math.sin(t * W2) * 0.04;
 
         this.drawBodyCircle(ctx, cx, cy, r, theme);
 
@@ -1266,8 +1287,8 @@ export class Renderer {
 
     /* ── 4  OWL (Purple) ── */
     private drawOwl(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, theme: CellTheme, t: number) {
-        const pupil = 0.85 + Math.sin(t * 0.8) * 0.15;
-        const tilt = Math.sin(t * 0.6) * 0.06;
+        const pupil = 0.85 + Math.sin(t * W1) * 0.15;
+        const tilt = Math.sin(t * W1 + 2) * 0.06;
 
         ctx.save();
         ctx.translate(cx, cy);
@@ -1341,9 +1362,9 @@ export class Renderer {
 
     /* ── 5  BUNNY (Pink) ── */
     private drawBunny(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, theme: CellTheme, t: number) {
-        const blink = Math.sin(t * 0.36 + cx * 0.05) > 0.91 ? 0.15 : 1;
-        const earFlop = Math.sin(t * 1.3) * 0.08;
-        const noseTw = Math.sin(t * 3.5) * r * 0.015;
+        const blink = Math.sin(t * W1 + cx * 0.05) > 0.91 ? 0.15 : 1;
+        const earFlop = Math.sin(t * W2) * 0.08;
+        const noseTw = Math.sin(t * W4) * r * 0.015;
 
         this.drawBodyCircle(ctx, cx, cy + r * 0.05, r * 0.95, theme);
 
@@ -1410,9 +1431,9 @@ export class Renderer {
 
     /* ── 6  PENGUIN (Teal) ── */
     private drawPenguin(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, theme: CellTheme, t: number) {
-        const blink = Math.sin(t * 0.34 + cy * 0.03) > 0.92 ? 0.2 : 1;
-        const waddle = Math.sin(t * 2.2) * 0.05;
-        const flipW = Math.sin(t * 2) * 0.15;
+        const blink = Math.sin(t * W1 + cy * 0.03) > 0.92 ? 0.2 : 1;
+        const waddle = Math.sin(t * W3) * 0.05;
+        const flipW = Math.sin(t * W3 + 1) * 0.15;
 
         ctx.save();
         ctx.translate(cx, cy);
@@ -1486,74 +1507,108 @@ export class Renderer {
         ctx.restore();
     }
 
-    /* ── JOKER (5-color pinwheel) ── */
-    private drawJokerCharacter(
-        ctx: CanvasRenderingContext2D,
-        cx: number,
-        cy: number,
-        r: number,
-        _theme: CellTheme,
-        t: number,
-    ) {
-        const rot = t * 0.4;
-        const sparkle = 0.85 + Math.sin(t * 2) * 0.15;
+    /* ── JOKER (5-color pinwheel) ──
+     * The rotating parts (pinwheel body + star outline) are cached as sprites
+     * and blitted through ctx.rotate() — rotation stays perfectly continuous
+     * while the ~45 path ops and 2 gradients the live painter cost per joker
+     * per frame collapse into 4 drawImage calls. Only the cheap face (which
+     * doesn't rotate) is drawn live. */
+    private buildJokerSprite(extent: number, paint: (sctx: CanvasRenderingContext2D, r: number) => void): HTMLCanvasElement {
+        const r = this.hexRadius * 0.52;
+        const half = Math.ceil(r * extent) + 1;
+        const c = document.createElement("canvas");
+        c.width = Math.ceil(half * 2 * this.dpr);
+        c.height = Math.ceil(half * 2 * this.dpr);
+        const sctx = c.getContext("2d")!;
+        sctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        sctx.translate(half, half);
+        paint(sctx, r);
+        return c;
+    }
+
+    private getJokerSprites() {
+        if (this.jokerSprites) return this.jokerSprites;
         const segCount = JOKER_SEGMENT_COLORS.length;
         const segAngle = (Math.PI * 2) / segCount;
 
-        // Draw 5-color pinwheel body
+        const glow = this.buildJokerSprite(GLOW_EXTENT, (sctx, r) => {
+            this.drawGlow(sctx, 0, 0, r, JOKER_THEME);
+        });
+
+        const body = this.buildJokerSprite(1, (sctx, r) => {
+            for (let i = 0; i < segCount; i++) {
+                const startA = segAngle * i - Math.PI / 2;
+                sctx.fillStyle = JOKER_SEGMENT_COLORS[i];
+                sctx.beginPath();
+                sctx.moveTo(0, 0);
+                sctx.arc(0, 0, r, startA, startA + segAngle);
+                sctx.closePath();
+                sctx.fill();
+            }
+            // Lighter inner ring for depth
+            for (let i = 0; i < segCount; i++) {
+                const startA = segAngle * i - Math.PI / 2;
+                sctx.fillStyle = JOKER_SEGMENT_COLORS[(i + 2) % segCount] + "55";
+                sctx.beginPath();
+                sctx.moveTo(0, 0);
+                sctx.arc(0, 0, r * 0.5, startA, startA + segAngle);
+                sctx.closePath();
+                sctx.fill();
+            }
+        });
+
+        const star = this.buildJokerSprite(0.7, (sctx, r) => {
+            sctx.strokeStyle = "rgba(255,255,255,0.5)";
+            sctx.lineWidth = r * 0.04;
+            sctx.beginPath();
+            for (let i = 0; i < 10; i++) {
+                const a = (i * Math.PI) / 5 - Math.PI / 2;
+                const d = i % 2 === 0 ? r * 0.65 : r * 0.3;
+                if (i === 0) sctx.moveTo(Math.cos(a) * d, Math.sin(a) * d);
+                else sctx.lineTo(Math.cos(a) * d, Math.sin(a) * d);
+            }
+            sctx.closePath();
+            sctx.stroke();
+        });
+
+        const shimmer = this.buildJokerSprite(1, (sctx, r) => {
+            const hl = sctx.createRadialGradient(-r * 0.2, -r * 0.25, 0, 0, 0, r * 0.85);
+            hl.addColorStop(0, "rgba(255,255,255,0.4)");
+            hl.addColorStop(1, "transparent");
+            sctx.fillStyle = hl;
+            sctx.beginPath();
+            sctx.arc(0, 0, r, 0, Math.PI * 2);
+            sctx.fill();
+        });
+
+        this.jokerSprites = { glow, body, star, shimmer };
+        return this.jokerSprites;
+    }
+
+    /** Blit a joker sprite centered on the origin of the current transform. */
+    private blitJokerSprite(ctx: CanvasRenderingContext2D, sprite: HTMLCanvasElement, scale: number) {
+        const half = (sprite.width / this.dpr / 2) * scale;
+        ctx.drawImage(sprite, -half, -half, half * 2, half * 2);
+    }
+
+    private drawJoker(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, t: number) {
+        const sprites = this.getJokerSprites();
+        const scale = r / (this.hexRadius * 0.52);
+        const rot = t * 0.4;
+
         ctx.save();
         ctx.translate(cx, cy);
+        this.blitJokerSprite(ctx, sprites.glow, scale);
         ctx.rotate(rot);
-        for (let i = 0; i < segCount; i++) {
-            const startA = segAngle * i - Math.PI / 2;
-            const endA = startA + segAngle;
-            ctx.fillStyle = JOKER_SEGMENT_COLORS[i];
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.arc(0, 0, r, startA, endA);
-            ctx.closePath();
-            ctx.fill();
-        }
-        // Lighter inner ring for depth
-        for (let i = 0; i < segCount; i++) {
-            const startA = segAngle * i - Math.PI / 2;
-            const endA = startA + segAngle;
-            ctx.fillStyle = JOKER_SEGMENT_COLORS[(i + 2) % segCount] + "55";
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.arc(0, 0, r * 0.5, startA, endA);
-            ctx.closePath();
-            ctx.fill();
-        }
-        ctx.restore();
-
-        // White shimmer overlay
-        const hl = ctx.createRadialGradient(cx - r * 0.2, cy - r * 0.25, 0, cx, cy, r * 0.85);
-        hl.addColorStop(0, "rgba(255,255,255,0.4)");
-        hl.addColorStop(1, "transparent");
-        ctx.fillStyle = hl;
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Spinning white star outline
-        ctx.save();
-        ctx.translate(cx, cy);
+        this.blitJokerSprite(ctx, sprites.body, scale);
+        ctx.rotate(-rot);
+        this.blitJokerSprite(ctx, sprites.shimmer, scale);
         ctx.rotate(rot * -0.6);
-        ctx.strokeStyle = "rgba(255,255,255,0.5)";
-        ctx.lineWidth = r * 0.04;
-        ctx.beginPath();
-        for (let i = 0; i < 10; i++) {
-            const a = (i * Math.PI) / 5 - Math.PI / 2;
-            const d = i % 2 === 0 ? r * 0.65 : r * 0.3;
-            if (i === 0) ctx.moveTo(Math.cos(a) * d, Math.sin(a) * d);
-            else ctx.lineTo(Math.cos(a) * d, Math.sin(a) * d);
-        }
-        ctx.closePath();
-        ctx.stroke();
+        this.blitJokerSprite(ctx, sprites.star, scale);
         ctx.restore();
 
-        // happy face on top
+        // happy face on top (doesn't rotate; cheap enough to stay live)
+        const sparkle = 0.85 + Math.sin(t * 2) * 0.15;
         const blink = Math.sin(t * 0.35) > 0.92 ? 0.15 : 1;
         const eyeY = cy - r * 0.14;
         for (const s of [-1, 1]) {
@@ -1588,7 +1643,4 @@ export class Renderer {
         return CELL_THEMES[colorIdx % CELL_THEMES.length].core;
     }
 
-    getCanvas(): HTMLCanvasElement {
-        return this.canvas;
-    }
 }

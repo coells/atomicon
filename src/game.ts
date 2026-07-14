@@ -30,8 +30,9 @@ const HEX_DIRS: [number, number][] = [
     [0, 1],
 ];
 
-function key(pos: Position): string {
-    return `${pos.row},${pos.col}`;
+/** Flat cell index — the canonical position key across game logic and rendering. */
+export function cellIndex(pos: Position): number {
+    return pos.row * GRID_SIZE + pos.col;
 }
 
 export function isValidCell(pos: Position): boolean {
@@ -63,7 +64,7 @@ export const ALL_VALID_POSITIONS: Position[] = (() => {
 const NEIGHBOR_TABLE: Position[][] = (() => {
     const table: Position[][] = Array.from({ length: GRID_SIZE * GRID_SIZE }, () => []);
     for (const pos of ALL_VALID_POSITIONS) {
-        const list = table[pos.row * GRID_SIZE + pos.col];
+        const list = table[cellIndex(pos)];
         for (const [dq, dr] of HEX_DIRS) {
             const next = { row: pos.row + dr, col: pos.col + dq };
             if (isValidCell(next)) list.push(next);
@@ -136,7 +137,7 @@ export function spawnCells(grid: Grid, nextColors: CellColor[]): Position[] {
 }
 
 function neighbors(pos: Position): Position[] {
-    return NEIGHBOR_TABLE[pos.row * GRID_SIZE + pos.col];
+    return NEIGHBOR_TABLE[cellIndex(pos)];
 }
 
 function createVisitedGrid(): boolean[][] {
@@ -148,7 +149,7 @@ export function findPath(grid: Grid, from: Position, to: Position): Position[] |
     if (from.row === to.row && from.col === to.col) return [];
     if (!isEmpty(grid, to)) return null;
 
-    const visited: boolean[][] = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(false));
+    const visited = createVisitedGrid();
     const parent: (Position | null)[][] = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(null));
 
     const queue: Position[] = [from];
@@ -213,8 +214,8 @@ function collectGroupForBase(
     return { group, baseCount };
 }
 
-export function checkLines(grid: Grid): { toRemove: Set<string>; score: number } {
-    const toRemove = new Set<string>();
+export function checkLines(grid: Grid): { toRemove: Set<number>; score: number } {
+    const toRemove = new Set<number>();
     let lineCount = 0;
 
     const visitedByBase = Array.from({ length: NUM_COLORS }, () => createVisitedGrid());
@@ -229,22 +230,17 @@ export function checkLines(grid: Grid): { toRemove: Set<string>; score: number }
 
         const { group, baseCount } = collectGroupForBase(grid, pos, baseColor, visited);
         if (group.length >= MIN_MATCH && baseCount > 0) {
-            let addedAny = false;
-            for (const groupPos of group) {
-                const groupKey = key(groupPos);
-                if (!toRemove.has(groupKey)) {
-                    toRemove.add(groupKey);
-                    addedAny = true;
-                }
-            }
-            if (addedAny) lineCount++;
+            // A qualifying group always contributes new cells: base-colored cells
+            // are only reachable by their own color's BFS, and visitedByBase
+            // prevents re-collection (jokers shared between groups just dedupe).
+            for (const groupPos of group) toRemove.add(cellIndex(groupPos));
+            lineCount++;
         }
     }
 
     let jokerRemoved = 0;
-    for (const posKey of toRemove) {
-        const [row, col] = posKey.split(",").map(Number);
-        if (grid[row][col].color === JOKER_COLOR) jokerRemoved++;
+    for (const idx of toRemove) {
+        if (grid[Math.floor(idx / GRID_SIZE)][idx % GRID_SIZE].color === JOKER_COLOR) jokerRemoved++;
     }
 
     const baseScore = toRemove.size * 2;
@@ -258,15 +254,10 @@ export function checkLines(grid: Grid): { toRemove: Set<string>; score: number }
     };
 }
 
-export function removeMatches(grid: Grid, toRemove: Set<string>): void {
-    for (const posKey of toRemove) {
-        const [row, col] = posKey.split(",").map(Number);
-        grid[row][col].color = EMPTY_COLOR;
+export function removeMatches(grid: Grid, toRemove: Set<number>): void {
+    for (const idx of toRemove) {
+        grid[Math.floor(idx / GRID_SIZE)][idx % GRID_SIZE].color = EMPTY_COLOR;
     }
-}
-
-export function isBoardFull(grid: Grid): boolean {
-    return getEmptyCells(grid).length === 0;
 }
 
 export function hasAnyMove(grid: Grid): boolean {

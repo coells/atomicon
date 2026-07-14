@@ -347,6 +347,15 @@
                     animation: none;
                 }
             }
+
+            /* Battery: the game-over overlay blurs the whole viewport, so any
+               motion behind it forces the GPU to re-blur the screen at native
+               refresh. Freeze the background layers while it's up. */
+            body:has(#overlay.visible)::before,
+            body:has(#overlay.visible)::after,
+            body:has(#overlay.visible) #bg-illustration {
+                animation-play-state: paused;
+            }
         </style>
     </head>
     <body>
