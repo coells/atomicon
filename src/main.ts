@@ -19,6 +19,19 @@ import { Renderer } from "./renderer";
 
 // ─── Sound FX + Generative Ambient Music ─────────────────────────────────────
 
+/** Options for a single synthesized SFX tone. */
+interface ToneOpts {
+    dur: number;
+    vol: number;
+    type: OscillatorType;
+    at?: number; // start offset in seconds
+    attack?: number;
+    hold?: number; // sustain at full volume until this offset
+    freqEnd?: number; // exponential frequency sweep target
+    sweep?: number; // sweep duration (defaults to dur)
+    detune?: number;
+}
+
 class SFX {
     private actx: AudioContext | null = null;
     private sfxEnabled = true;
@@ -27,12 +40,13 @@ class SFX {
     /* ── ambient music engine state ── */
     private musicRunning = false;
     private musicTimer: number | null = null;
+    private melodyTimer: number | null = null;
     private reverbSend: GainNode | null = null;
     private reverbReturn: ConvolverNode | null = null;
     private masterGain: GainNode | null = null;
+    private compressor: DynamicsCompressorNode | null = null;
     private harmStep = 0;
     private melodyPos = 0;
-    private melodyTimer: number | null = null;
     private activeNodes: { osc: OscillatorNode; stop: number }[] = [];
 
     /*
@@ -67,8 +81,6 @@ class SFX {
         [-1, -1, 12, -1, -1, -1, -1, -1, -1, -1, -1, 7, -1, -1, -1, -1],
     ];
 
-    private readonly baseMidi = 50; // D3
-
     private ensure() {
         if (!this.actx) this.actx = new AudioContext();
         return this.actx;
@@ -83,6 +95,7 @@ class SFX {
 
     setSfxEnabled(enabled: boolean) {
         this.sfxEnabled = enabled;
+        if (!enabled) this.maybeSuspend();
     }
 
     setMusicEnabled(enabled: boolean) {
@@ -102,6 +115,30 @@ class SFX {
         return this.musicEnabled;
     }
 
+    /**
+     * Battery: when the game is backgrounded, suspend the audio graph (the
+     * convolver reverb costs real CPU even when silent) and stop the music
+     * timers so oscillator nodes don't pile up while hidden.
+     */
+    handleVisibility(hidden: boolean) {
+        const ctx = this.actx;
+        if (!ctx) return;
+        if (hidden) {
+            this.clearTimers();
+            void ctx.suspend();
+        } else {
+            if (this.sfxEnabled || this.musicEnabled) void ctx.resume();
+            if (this.musicRunning) this.startTimers();
+        }
+    }
+
+    /** Suspend the context when nothing can produce sound. */
+    private maybeSuspend() {
+        if (!this.sfxEnabled && !this.musicEnabled && !this.musicRunning && this.actx) {
+            void this.actx.suspend();
+        }
+    }
+
     /* ═══════════════════════════════════════════════════════════════════════
      *  AMBIENT MUSIC ENGINE
      * ═══════════════════════════════════════════════════════════════════════ */
@@ -117,13 +154,13 @@ class SFX {
         this.masterGain.gain.setValueAtTime(0.0001, now);
         this.masterGain.gain.exponentialRampToValueAtTime(1, now + 3);
 
-        const compressor = ctx.createDynamicsCompressor();
-        compressor.threshold.value = -20;
-        compressor.knee.value = 14;
-        compressor.ratio.value = 3;
-        compressor.attack.value = 0.1;
-        compressor.release.value = 0.3;
-        this.masterGain.connect(compressor).connect(ctx.destination);
+        this.compressor = ctx.createDynamicsCompressor();
+        this.compressor.threshold.value = -20;
+        this.compressor.knee.value = 14;
+        this.compressor.ratio.value = 3;
+        this.compressor.attack.value = 0.1;
+        this.compressor.release.value = 0.3;
+        this.masterGain.connect(this.compressor).connect(ctx.destination);
 
         // ── reverb ──
         this.reverbReturn = this.buildReverb(ctx, 3.5, 2.2);
@@ -137,11 +174,26 @@ class SFX {
         this.melodyPos = 0;
         this.playChord();
 
+        this.startTimers();
+    }
+
+    private startTimers() {
+        this.clearTimers();
         // advance chords every ~10s
         this.musicTimer = window.setInterval(() => this.advanceHarmony(), 10000);
-
         // melody tick every ~650ms (slow, sparse)
         this.melodyTimer = window.setInterval(() => this.melodyTick(), 650);
+    }
+
+    private clearTimers() {
+        if (this.musicTimer !== null) {
+            clearInterval(this.musicTimer);
+            this.musicTimer = null;
+        }
+        if (this.melodyTimer !== null) {
+            clearInterval(this.melodyTimer);
+            this.melodyTimer = null;
+        }
     }
 
     private stopMusic() {
@@ -154,14 +206,7 @@ class SFX {
             this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
             this.masterGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.5);
         }
-        if (this.musicTimer !== null) {
-            clearInterval(this.musicTimer);
-            this.musicTimer = null;
-        }
-        if (this.melodyTimer !== null) {
-            clearInterval(this.melodyTimer);
-            this.melodyTimer = null;
-        }
+        this.clearTimers();
 
         setTimeout(() => {
             for (const n of this.activeNodes) {
@@ -170,9 +215,16 @@ class SFX {
                 } catch {}
             }
             this.activeNodes = [];
+            // Disconnect the whole music bus — an idle convolver still burns CPU
+            this.reverbSend?.disconnect();
+            this.reverbReturn?.disconnect();
+            this.masterGain?.disconnect();
+            this.compressor?.disconnect();
             this.reverbSend = null;
             this.reverbReturn = null;
             this.masterGain = null;
+            this.compressor = null;
+            this.maybeSuspend();
         }, 2000);
     }
 
@@ -196,7 +248,7 @@ class SFX {
 
     /* ── play a sustained chord (voices fade in / out over ~9s) ── */
     private playChord() {
-        if (!this.musicRunning || !this.actx) return;
+        if (!this.musicRunning || !this.actx || this.actx.state !== "running") return;
         const ctx = this.actx;
         const now = ctx.currentTime;
         const chord = this.chords[this.harmStep % this.chords.length];
@@ -307,267 +359,118 @@ class SFX {
         }
     }
 
-    private rootFreq() {
-        return this.midiToFreq(this.chords[this.harmStep % this.chords.length].root);
-    }
-
     /* ═══════════════════════════════════════════════════════════════════════
-     *  SFX HELPERS
+     *  SFX
      * ═══════════════════════════════════════════════════════════════════════ */
 
     private midiToFreq(midi: number): number {
         return 440 * Math.pow(2, (midi - 69) / 12);
     }
 
-    /** Play a short SFX tone routed to destination (bypasses music bus). */
-    private playSfxTone(
-        frequency: number,
-        opts: {
-            duration: number;
-            volume: number;
-            type: OscillatorType;
-            attack?: number;
-            release?: number;
-            detune?: number;
-        },
-    ) {
+    /** Play one short enveloped tone routed straight to the destination. */
+    private tone(freq: number, o: ToneOpts) {
         const ctx = this.ensure();
+        const t0 = ctx.currentTime + (o.at ?? 0);
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
+        osc.connect(gain).connect(ctx.destination);
 
-        osc.type = opts.type;
-        osc.frequency.value = frequency;
-        if (opts.detune) osc.detune.value = opts.detune;
+        osc.type = o.type;
+        osc.frequency.setValueAtTime(freq, t0);
+        if (o.freqEnd) osc.frequency.exponentialRampToValueAtTime(o.freqEnd, t0 + (o.sweep ?? o.dur));
+        if (o.detune) osc.detune.value = o.detune;
 
-        const now = ctx.currentTime;
-        const attack = opts.attack ?? 0.02;
-        const release = opts.release ?? opts.duration;
+        const attack = o.attack ?? 0.015;
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(o.vol, t0 + attack);
+        if (o.hold) gain.gain.setValueAtTime(o.vol, t0 + o.hold);
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + o.dur);
 
-        gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.exponentialRampToValueAtTime(opts.volume, now + attack);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + release);
+        osc.start(t0);
+        osc.stop(t0 + o.dur + 0.05);
+    }
 
-        osc.start(now);
-        osc.stop(now + opts.duration);
+    /** Play an ascending note sequence, one tone every `step` seconds. */
+    private seq(freqs: number[], step: number, opts: Omit<ToneOpts, "at">) {
+        freqs.forEach((freq, i) => this.tone(freq, { ...opts, at: i * step }));
     }
 
     pop() {
         if (!this.sfxEnabled) return;
-        const ctx = this.ensure();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(600, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.08);
-        gain.gain.setValueAtTime(0.15, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
-        osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + 0.15);
+        this.tone(600, { dur: 0.15, vol: 0.15, type: "sine", freqEnd: 1200, sweep: 0.08, attack: 0.005 });
     }
 
     move() {
         if (!this.sfxEnabled) return;
-        const ctx = this.ensure();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = "triangle";
-        osc.frequency.setValueAtTime(260, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(520, ctx.currentTime + 0.14);
-        gain.gain.setValueAtTime(0.08, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
-        osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + 0.18);
+        this.tone(260, { dur: 0.18, vol: 0.08, type: "triangle", freqEnd: 520, sweep: 0.14, attack: 0.005 });
     }
 
     score() {
         if (!this.sfxEnabled) return;
-        const ctx = this.ensure();
-        const notes = [523, 659, 784, 1047];
-        notes.forEach((freq, i) => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.type = "sine";
-            osc.frequency.value = freq;
-            gain.gain.setValueAtTime(0.1, ctx.currentTime + i * 0.08);
-            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.08 + 0.2);
-            osc.start(ctx.currentTime + i * 0.08);
-            osc.stop(ctx.currentTime + i * 0.08 + 0.2);
-        });
+        this.seq([523, 659, 784, 1047], 0.08, { dur: 0.2, vol: 0.1, type: "sine", attack: 0.005 });
     }
 
     combo() {
         if (!this.sfxEnabled) return;
-        const ctx = this.ensure();
-        const notes = [659, 784, 988, 1318];
-        notes.forEach((freq, i) => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.type = "sine";
-            osc.frequency.value = freq;
-            gain.gain.setValueAtTime(0.12, ctx.currentTime + i * 0.05);
-            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.05 + 0.16);
-            osc.start(ctx.currentTime + i * 0.05);
-            osc.stop(ctx.currentTime + i * 0.05 + 0.16);
-        });
+        this.seq([659, 784, 988, 1318], 0.05, { dur: 0.16, vol: 0.12, type: "sine", attack: 0.005 });
     }
 
     /** Celebration sound for big clears. tier: 1=6 cells, 2=7 cells, 3=8+ cells */
     celebration(tier: number) {
         if (!this.sfxEnabled) return;
-        const ctx = this.ensure();
-        const now = ctx.currentTime;
 
         if (tier === 1) {
             // Bright ascending sparkle: pentatonic run
-            const notes = [784, 880, 1047, 1175, 1319];
-            notes.forEach((freq, i) => {
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.type = "sine";
-                osc.frequency.value = freq;
-                const t = now + i * 0.06;
-                gain.gain.setValueAtTime(0.0001, t);
-                gain.gain.exponentialRampToValueAtTime(0.12, t + 0.02);
-                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
-                osc.start(t);
-                osc.stop(t + 0.3);
-            });
+            this.seq([784, 880, 1047, 1175, 1319], 0.06, { dur: 0.25, vol: 0.12, type: "sine", attack: 0.02 });
         } else if (tier === 2) {
             // Richer cascade with shimmer
             const notes = [659, 784, 988, 1175, 1319, 1568];
             notes.forEach((freq, i) => {
                 for (const detune of [-6, 0, 6]) {
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.type = detune === 0 ? "sine" : "triangle";
-                    osc.frequency.value = freq;
-                    osc.detune.value = detune;
-                    const t = now + i * 0.055;
-                    const vol = detune === 0 ? 0.13 : 0.04;
-                    gain.gain.setValueAtTime(0.0001, t);
-                    gain.gain.exponentialRampToValueAtTime(vol, t + 0.02);
-                    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
-                    osc.start(t);
-                    osc.stop(t + 0.4);
+                    this.tone(freq, {
+                        at: i * 0.055,
+                        dur: 0.35,
+                        vol: detune === 0 ? 0.13 : 0.04,
+                        type: detune === 0 ? "sine" : "triangle",
+                        attack: 0.02,
+                        detune,
+                    });
                 }
             });
         } else {
             // Epic fanfare: chord burst + ascending run + shimmer tail
-            // Initial chord burst
-            const chordFreqs = [523, 659, 784, 1047];
-            chordFreqs.forEach((freq) => {
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.type = "sine";
-                osc.frequency.value = freq;
-                gain.gain.setValueAtTime(0.0001, now);
-                gain.gain.exponentialRampToValueAtTime(0.1, now + 0.015);
-                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-                osc.start(now);
-                osc.stop(now + 0.55);
-            });
-            // Ascending sparkle run
+            this.seq([523, 659, 784, 1047], 0, { dur: 0.5, vol: 0.1, type: "sine", attack: 0.015 });
             const runNotes = [784, 988, 1175, 1319, 1568, 1760, 2093];
-            runNotes.forEach((freq, i) => {
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.type = "sine";
-                osc.frequency.value = freq;
-                const t = now + 0.1 + i * 0.05;
-                gain.gain.setValueAtTime(0.0001, t);
-                gain.gain.exponentialRampToValueAtTime(0.11, t + 0.02);
-                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
-                osc.start(t);
-                osc.stop(t + 0.35);
-            });
-            // Shimmer tail
+            runNotes.forEach((freq, i) =>
+                this.tone(freq, { at: 0.1 + i * 0.05, dur: 0.3, vol: 0.11, type: "sine", attack: 0.02 }),
+            );
             for (let i = 0; i < 4; i++) {
-                const freq = 1568 + Math.random() * 800;
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.type = "triangle";
-                osc.frequency.value = freq;
-                const t = now + 0.45 + i * 0.08;
-                gain.gain.setValueAtTime(0.0001, t);
-                gain.gain.exponentialRampToValueAtTime(0.05, t + 0.02);
-                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
-                osc.start(t);
-                osc.stop(t + 0.55);
+                this.tone(1568 + Math.random() * 800, {
+                    at: 0.45 + i * 0.08,
+                    dur: 0.5,
+                    vol: 0.05,
+                    type: "triangle",
+                    attack: 0.02,
+                });
             }
         }
     }
 
     error() {
         if (!this.sfxEnabled) return;
-        const ctx = this.ensure();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = "square";
-        osc.frequency.setValueAtTime(200, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.15);
-        gain.gain.setValueAtTime(0.08, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
-        osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + 0.2);
+        this.tone(200, { dur: 0.2, vol: 0.08, type: "square", freqEnd: 100, sweep: 0.15, attack: 0.005 });
     }
 
     gameOver() {
         if (!this.sfxEnabled) return;
-        const ctx = this.ensure();
         // Triumphant ascending fanfare: C5 → E5 → G5 → C6
         const notes = [523, 659, 784, 1047];
-        const now = ctx.currentTime;
-        notes.forEach((freq, i) => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.type = "sine";
-            osc.frequency.value = freq;
-            const start = now + i * 0.12;
-            gain.gain.setValueAtTime(0.0001, start);
-            gain.gain.exponentialRampToValueAtTime(0.14, start + 0.04);
-            gain.gain.setValueAtTime(0.14, start + 0.18);
-            gain.gain.exponentialRampToValueAtTime(0.001, start + 0.45);
-            osc.start(start);
-            osc.stop(start + 0.5);
-        });
+        notes.forEach((freq, i) =>
+            this.tone(freq, { at: i * 0.12, dur: 0.45, vol: 0.14, type: "sine", attack: 0.04, hold: 0.18 }),
+        );
         // Final shimmering octave chord
         for (const freq of [1047, 1318, 1568]) {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.type = "triangle";
-            osc.frequency.value = freq;
-            const start = now + 0.48;
-            gain.gain.setValueAtTime(0.0001, start);
-            gain.gain.exponentialRampToValueAtTime(0.08, start + 0.06);
-            gain.gain.exponentialRampToValueAtTime(0.001, start + 1.0);
-            osc.start(start);
-            osc.stop(start + 1.1);
+            this.tone(freq, { at: 0.48, dur: 1.0, vol: 0.08, type: "triangle", attack: 0.06 });
         }
     }
 }
@@ -587,6 +490,11 @@ enum Phase {
 // Sound mode: 0=off, 1=effects only, 2=music only, 3=effects+music
 type SoundMode = 0 | 1 | 2 | 3;
 
+// Adaptive frame pacing: full rate only while something is animating.
+// (Also caps 120Hz ProMotion displays at 60fps — rAF alone would run at 120.)
+const BUSY_FRAME_MS = 1000 / 60;
+const IDLE_FRAME_MS = 1000 / 30;
+
 class AtomiconGame {
     private grid: Grid;
     private renderer: Renderer;
@@ -599,9 +507,8 @@ class AtomiconGame {
     private best: number;
     private nextColors: CellColor[] = [];
     private pendingRemove: Set<string> | null = null;
-    private pendingLineScore = 0;
-    private pendingLineCount = 0;
     private soundMode: SoundMode = 3;
+    private lastFrame = 0;
 
     // DOM refs
     private scoreEl: HTMLElement;
@@ -610,6 +517,7 @@ class AtomiconGame {
     private nextDots: HTMLElement[];
     private overlay: HTMLElement;
     private finalScoreEl: HTMLElement;
+    private topScoresEl: HTMLElement | null;
     private soundToggleBtn: HTMLButtonElement;
 
     private readonly leaderboardKey = "atomicon_leaderboard";
@@ -624,6 +532,7 @@ class AtomiconGame {
         this.messageEl = document.getElementById("message")!;
         this.overlay = document.getElementById("overlay")!;
         this.finalScoreEl = document.getElementById("final-score")!;
+        this.topScoresEl = document.getElementById("top-scores");
         this.soundToggleBtn = document.getElementById("sound-toggle") as HTMLButtonElement;
         this.nextDots = [];
         for (let i = 0; i < PREVIEW_SIZE; i++) {
@@ -648,6 +557,9 @@ class AtomiconGame {
         this.soundToggleBtn.addEventListener("click", () => this.cycleSoundMode());
         window.addEventListener("keydown", (e) => this.handleHotkeys(e));
 
+        // Battery: silence the audio graph while the game is backgrounded
+        document.addEventListener("visibilitychange", () => this.sfx.handleVisibility(document.hidden));
+
         let resizeTimer: ReturnType<typeof setTimeout> | undefined;
         const scheduleResize = (delay = 150) => {
             clearTimeout(resizeTimer);
@@ -663,7 +575,7 @@ class AtomiconGame {
         this.renderer.onAnimationComplete = () => this.onAnimComplete();
 
         this.newGame();
-        this.loop();
+        requestAnimationFrame(this.loop);
         this.syncSoundButton();
         void this.sfx.unlock().then(() => {
             if (this.soundMode >= 2) this.sfx.startMusic();
@@ -688,8 +600,10 @@ class AtomiconGame {
         const musicOn = this.soundMode === 2 || this.soundMode === 3;
         this.sfx.setSfxEnabled(sfxOn);
         this.sfx.setMusicEnabled(musicOn);
-        if (musicOn) {
-            void this.sfx.unlock().then(() => this.sfx.startMusic());
+        if (this.soundMode > 0) {
+            void this.sfx.unlock().then(() => {
+                if (musicOn) this.sfx.startMusic();
+            });
         }
     }
 
@@ -727,15 +641,11 @@ class AtomiconGame {
         }
     }
 
-    private storeLeaderboard(scores: number[]) {
-        localStorage.setItem(this.leaderboardKey, JSON.stringify(scores.slice(0, 5)));
-    }
-
     private submitLeaderboard(score: number) {
         const scores = this.getLeaderboard();
         scores.push(score);
         scores.sort((a, b) => b - a);
-        this.storeLeaderboard(scores.slice(0, 5));
+        localStorage.setItem(this.leaderboardKey, JSON.stringify(scores.slice(0, 5)));
     }
 
     // ─── Game lifecycle ────────────────────────────────────────────────────
@@ -747,8 +657,6 @@ class AtomiconGame {
         this.moveCount = 0;
         this.selected = null;
         this.pendingRemove = null;
-        this.pendingLineScore = 0;
-        this.pendingLineCount = 0;
         this.phase = Phase.SELECT;
         this.overlay.classList.remove("visible");
         this.renderer.setSelected(null);
@@ -802,163 +710,122 @@ class AtomiconGame {
 
         const cellColor = this.grid[pos.row][pos.col].color;
 
-        if (this.selected === null) {
-            // Select a cell with a micro
-            if (cellColor >= 0) {
-                this.selected = pos;
-                this.renderer.setSelected(pos);
-                this.sfx.pop();
-                this.setMessage("Select destination");
-            }
-        } else {
-            // Second click
-            if (cellColor >= 0) {
-                // Re-select a different micro
-                this.selected = pos;
-                this.renderer.setSelected(pos);
-                this.sfx.pop();
-                this.setMessage("Select destination");
-                return;
-            }
-
-            // Try to move
-            const path = findPath(this.grid, this.selected, pos);
-            if (!path || path.length === 0) {
-                this.sfx.error();
-                this.setMessage("No path! Try another cell");
-                return;
-            }
-
-            // Execute move
-            this.phase = Phase.MOVE_ANIM;
-            const movingColor = this.grid[this.selected.row][this.selected.col].color;
-
-            // Clear source
-            this.grid[this.selected.row][this.selected.col].color = -1;
-            // Set destination (so line check after anim works)
-            this.grid[pos.row][pos.col].color = movingColor;
-
-            // Build full path including source
-            const fullPath = [this.selected, ...path];
-
-            this.renderer.setSelected(null);
-            this.renderer.startPathAnimation(fullPath, movingColor);
-            this.sfx.move();
-            this.selected = null;
-            this.setMessage("");
+        if (cellColor >= 0) {
+            // Select (or re-select) a micro
+            this.selected = pos;
+            this.renderer.setSelected(pos);
+            this.sfx.pop();
+            this.setMessage("Select destination");
+            return;
         }
+
+        if (this.selected === null) return;
+
+        // Try to move
+        const path = findPath(this.grid, this.selected, pos);
+        if (!path || path.length === 0) {
+            this.sfx.error();
+            this.setMessage("No path! Try another cell");
+            return;
+        }
+
+        // Execute move
+        this.phase = Phase.MOVE_ANIM;
+        const movingColor = this.grid[this.selected.row][this.selected.col].color;
+
+        // Clear source
+        this.grid[this.selected.row][this.selected.col].color = -1;
+        // Set destination (so line check after anim works)
+        this.grid[pos.row][pos.col].color = movingColor;
+
+        // Build full path including source
+        const fullPath = [this.selected, ...path];
+
+        this.renderer.setSelected(null);
+        this.renderer.startPathAnimation(fullPath, movingColor);
+        this.sfx.move();
+        this.selected = null;
+        this.setMessage("");
     }
 
     // ─── Animation complete callback ────────────────────────────────────
 
+    /**
+     * Score any lines on the board and kick off the removal animation.
+     * Returns false when there was nothing to clear.
+     */
+    private handleClears(comboLabel: string): boolean {
+        const { toRemove, score } = checkLines(this.grid);
+        if (toRemove.size === 0) {
+            this.combo = 0;
+            return false;
+        }
+
+        this.combo++;
+        const comboBonus = this.combo > 1 ? Math.floor(score * 0.2 * (this.combo - 1)) : 0;
+        const turnScore = score + comboBonus;
+        this.score += turnScore;
+        if (this.score > this.best) {
+            this.best = this.score;
+            localStorage.setItem("atomicon_best", String(this.best));
+        }
+
+        this.pendingRemove = toRemove;
+        this.phase = Phase.REMOVE_ANIM;
+        this.renderer.startRemoveAnimation(toRemove);
+        this.triggerCelebration(toRemove);
+        if (this.combo > 1) {
+            this.sfx.combo();
+            this.setMessage(`${comboLabel} x${this.combo}! +${turnScore}`);
+        } else {
+            this.sfx.score();
+            this.setMessage(`+${turnScore} points`);
+        }
+        this.updateUI();
+        return true;
+    }
+
     private onAnimComplete() {
-        if (this.phase === Phase.MOVE_ANIM) {
-            this.moveCount++;
-            // Check for lines
-            const { toRemove, score, lineCount } = checkLines(this.grid);
-            if (toRemove.size > 0) {
-                this.combo++;
-                const comboBonus = this.combo > 1 ? Math.floor(score * 0.2 * (this.combo - 1)) : 0;
-                const turnScore = score + comboBonus;
-                this.score += turnScore;
-                if (this.score > this.best) {
-                    this.best = this.score;
-                    localStorage.setItem("atomicon_best", String(this.best));
+        switch (this.phase) {
+            case Phase.MOVE_ANIM:
+                this.moveCount++;
+                if (!this.handleClears("Combo")) this.spawnPhase();
+                return;
+
+            case Phase.REMOVE_ANIM:
+                if (this.pendingRemove) {
+                    removeMatches(this.grid, this.pendingRemove);
+                    this.pendingRemove = null;
                 }
-                this.pendingRemove = toRemove;
-                this.pendingLineScore = turnScore;
-                this.pendingLineCount = lineCount;
-                this.phase = Phase.REMOVE_ANIM;
-                this.renderer.startRemoveAnimation(toRemove);
-                this.triggerCelebration(toRemove);
-                if (this.combo > 1) {
-                    this.sfx.combo();
-                    this.setMessage(`Combo x${this.combo}! +${turnScore}`);
-                } else {
-                    this.sfx.score();
-                    this.setMessage(`+${turnScore} points`);
+                // Cleared the whole board? Spawn instead of stranding the player.
+                if (countOccupied(this.grid) === 0) {
+                    this.spawnPhase();
+                    return;
                 }
+                this.phase = Phase.SELECT;
+                this.setMessage("Select a cell to move");
                 this.updateUI();
                 return;
-            }
 
-            this.combo = 0;
-            // No score — spawn new cells
-            this.spawnPhase();
-            return;
-        }
-
-        if (this.phase === Phase.REMOVE_ANIM) {
-            if (this.pendingRemove) {
-                removeMatches(this.grid, this.pendingRemove);
-            }
-            this.pendingRemove = null;
-            this.pendingLineScore = 0;
-            this.pendingLineCount = 0;
-
-            if (!hasAnyMove(this.grid) || isBoardFull(this.grid)) {
-                this.gameOver();
-                return;
-            }
-
-            this.phase = Phase.SELECT;
-            this.setMessage("Select a cell to move");
-            this.updateUI();
-            return;
-        }
-
-        if (this.phase === Phase.SPAWN_ANIM) {
-            // Check if spawned cells create lines
-            const { toRemove, score } = checkLines(this.grid);
-            if (toRemove.size > 0) {
-                this.combo++;
-                const comboBonus = this.combo > 1 ? Math.floor(score * 0.2 * (this.combo - 1)) : 0;
-                const turnScore = score + comboBonus;
-                this.score += turnScore;
-                if (this.score > this.best) {
-                    this.best = this.score;
-                    localStorage.setItem("atomicon_best", String(this.best));
+            case Phase.SPAWN_ANIM:
+                if (this.handleClears("Chain combo")) return;
+                if (isBoardFull(this.grid) || !hasAnyMove(this.grid)) {
+                    this.gameOver();
+                    return;
                 }
-                this.pendingRemove = toRemove;
-                this.phase = Phase.REMOVE_ANIM;
-                this.renderer.startRemoveAnimation(toRemove);
-                this.triggerCelebration(toRemove);
-                if (this.combo > 1) {
-                    this.sfx.combo();
-                    this.setMessage(`Chain combo x${this.combo}! +${turnScore}`);
-                } else {
-                    this.sfx.score();
-                    this.setMessage(`+${turnScore} points`);
-                }
+                this.phase = Phase.SELECT;
+                this.setMessage("Select a cell to move");
                 this.updateUI();
                 return;
-            }
-
-            this.combo = 0;
-            // Check game over
-            if (isBoardFull(this.grid) || !hasAnyMove(this.grid)) {
-                this.gameOver();
-                return;
-            }
-
-            this.phase = Phase.SELECT;
-            this.setMessage("Select a cell to move");
-            this.updateUI();
-            return;
         }
     }
 
     /** Trigger celebration effects when clearing 6+ cells */
     private triggerCelebration(toRemove: Set<string>) {
-        if (toRemove.size >= 8) {
-            this.renderer.startCelebration(toRemove, 3);
-            this.sfx.celebration(3);
-        } else if (toRemove.size >= 7) {
-            this.renderer.startCelebration(toRemove, 2);
-            this.sfx.celebration(2);
-        } else if (toRemove.size >= 6) {
-            this.renderer.startCelebration(toRemove, 1);
-            this.sfx.celebration(1);
+        const tier = toRemove.size >= 8 ? 3 : toRemove.size >= 7 ? 2 : toRemove.size >= 6 ? 1 : 0;
+        if (tier > 0) {
+            this.renderer.startCelebration(toRemove, tier);
+            this.sfx.celebration(tier);
         }
     }
 
@@ -986,15 +853,40 @@ class AtomiconGame {
         this.sfx.gameOver();
         this.submitLeaderboard(this.score);
         this.finalScoreEl.textContent = String(this.score);
+        this.renderTopScores();
         this.overlay.classList.add("visible");
         this.setMessage("Game Over");
     }
 
+    private renderTopScores() {
+        if (!this.topScoresEl) return;
+        this.topScoresEl.textContent = "";
+        let highlighted = false;
+        for (const value of this.getLeaderboard()) {
+            const li = document.createElement("li");
+            li.textContent = String(value);
+            if (!highlighted && value === this.score) {
+                li.classList.add("current");
+                highlighted = true;
+            }
+            this.topScoresEl.appendChild(li);
+        }
+    }
+
     // ─── Render loop ───────────────────────────────────────────────────────
 
-    private loop = () => {
-        this.renderer.draw(this.grid);
+    /**
+     * Adaptive frame pacing: 60fps while animating, 30fps when the board is
+     * idle (characters still bob and blink — the sprite phases advance ~5x/s).
+     * rAF itself stops while the tab is hidden, so a backgrounded game costs
+     * nothing.
+     */
+    private loop = (now: number) => {
         requestAnimationFrame(this.loop);
+        const interval = this.renderer.isBusy() ? BUSY_FRAME_MS : IDLE_FRAME_MS;
+        if (now - this.lastFrame < interval - 2) return;
+        this.lastFrame = now;
+        this.renderer.draw(this.grid);
     };
 }
 

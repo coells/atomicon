@@ -47,7 +47,9 @@ export function isValidCell(pos: Position): boolean {
     return true;
 }
 
-export function getAllValidPositions(): Position[] {
+// The board never changes shape — precompute valid positions and the
+// neighbor table once so per-move logic (BFS, line checks) never re-derives them.
+const ALL_VALID_POSITIONS: Position[] = (() => {
     const positions: Position[] = [];
     for (let row = 0; row < GRID_SIZE; row++) {
         for (let col = 0; col < GRID_SIZE; col++) {
@@ -56,6 +58,22 @@ export function getAllValidPositions(): Position[] {
         }
     }
     return positions;
+})();
+
+const NEIGHBOR_TABLE: Position[][] = (() => {
+    const table: Position[][] = Array.from({ length: GRID_SIZE * GRID_SIZE }, () => []);
+    for (const pos of ALL_VALID_POSITIONS) {
+        const list = table[pos.row * GRID_SIZE + pos.col];
+        for (const [dq, dr] of HEX_DIRS) {
+            const next = { row: pos.row + dr, col: pos.col + dq };
+            if (isValidCell(next)) list.push(next);
+        }
+    }
+    return table;
+})();
+
+export function getAllValidPositions(): Position[] {
+    return ALL_VALID_POSITIONS;
 }
 
 export function createEmptyGrid(): Grid {
@@ -122,12 +140,7 @@ export function spawnCells(grid: Grid, nextColors: CellColor[]): Position[] {
 }
 
 function neighbors(pos: Position): Position[] {
-    const list: Position[] = [];
-    for (const [dq, dr] of HEX_DIRS) {
-        const next = { row: pos.row + dr, col: pos.col + dq };
-        if (isValidCell(next)) list.push(next);
-    }
-    return list;
+    return NEIGHBOR_TABLE[pos.row * GRID_SIZE + pos.col];
 }
 
 function createVisitedGrid(): boolean[][] {
@@ -145,8 +158,9 @@ export function findPath(grid: Grid, from: Position, to: Position): Position[] |
     const queue: Position[] = [from];
     visited[from.row][from.col] = true;
 
-    while (queue.length > 0) {
-        const cur = queue.shift()!;
+    let head = 0;
+    while (head < queue.length) {
+        const cur = queue[head++];
         for (const next of neighbors(cur)) {
             if (visited[next.row][next.col]) continue;
             const isSource = next.row === from.row && next.col === from.col;
@@ -183,8 +197,9 @@ function collectGroupForBase(
     const queue: Position[] = [start];
     visited[start.row][start.col] = true;
 
-    while (queue.length > 0) {
-        const current = queue.shift()!;
+    let head = 0;
+    while (head < queue.length) {
+        const current = queue[head++];
         const color = grid[current.row][current.col].color;
         group.push(current);
 

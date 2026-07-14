@@ -2,7 +2,10 @@
 <html lang="en">
     <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+        <meta name="theme-color" content="#0b1324" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <title>a-tom-I-con</title>
         <style>
             * {
@@ -26,6 +29,9 @@
                 overflow: hidden;
                 color: #d6e6ff;
                 padding: 24px 16px 32px;
+                /* iOS: no double-tap zoom on rapid taps, no gray tap flash */
+                touch-action: manipulation;
+                -webkit-tap-highlight-color: transparent;
             }
 
             body::before,
@@ -208,6 +214,9 @@
             #game-canvas {
                 border-radius: 18px;
                 cursor: pointer;
+                touch-action: manipulation;
+                -webkit-user-select: none;
+                user-select: none;
                 border: 1px solid rgba(164, 194, 232, 0.22);
                 box-shadow:
                     0 0 60px rgba(127, 239, 206, 0.08),
@@ -276,7 +285,43 @@
             #overlay .final-score {
                 font-size: 24px;
                 color: #c0d8f0;
+                margin-bottom: 16px;
+            }
+
+            #top-scores {
+                list-style: none;
+                counter-reset: rank;
                 margin-bottom: 24px;
+                min-width: 140px;
+                padding: 10px 18px;
+                background: rgba(20, 32, 56, 0.55);
+                border: 1px solid rgba(161, 190, 227, 0.2);
+                border-radius: 12px;
+            }
+
+            #top-scores:empty {
+                display: none;
+            }
+
+            #top-scores li {
+                counter-increment: rank;
+                display: flex;
+                justify-content: space-between;
+                gap: 24px;
+                font-size: 15px;
+                color: #9ab4d8;
+                padding: 2px 0;
+            }
+
+            #top-scores li::before {
+                content: counter(rank) ".";
+                color: #62799e;
+            }
+
+            #top-scores li.current {
+                color: #7fefce;
+                font-weight: 700;
+                text-shadow: 0 0 10px rgba(127, 239, 206, 0.4);
             }
 
             #overlay button {
@@ -292,6 +337,15 @@
 
             #overlay button:hover {
                 background: rgba(127, 239, 206, 0.25);
+            }
+
+            /* Accessibility + battery: skip the decorative background motion */
+            @media (prefers-reduced-motion: reduce) {
+                body::before,
+                body::after,
+                #bg-illustration {
+                    animation: none;
+                }
             }
         </style>
     </head>
@@ -334,6 +388,7 @@
         <div id="overlay">
             <h2>GAME OVER</h2>
             <div class="final-score">Score: <span id="final-score">0</span></div>
+            <ol id="top-scores"></ol>
             <button id="play-again-btn">PLAY AGAIN</button>
         </div>
 
