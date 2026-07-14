@@ -49,7 +49,7 @@ export function isValidCell(pos: Position): boolean {
 
 // The board never changes shape — precompute valid positions and the
 // neighbor table once so per-move logic (BFS, line checks) never re-derives them.
-const ALL_VALID_POSITIONS: Position[] = (() => {
+export const ALL_VALID_POSITIONS: Position[] = (() => {
     const positions: Position[] = [];
     for (let row = 0; row < GRID_SIZE; row++) {
         for (let col = 0; col < GRID_SIZE; col++) {
@@ -72,10 +72,6 @@ const NEIGHBOR_TABLE: Position[][] = (() => {
     return table;
 })();
 
-export function getAllValidPositions(): Position[] {
-    return ALL_VALID_POSITIONS;
-}
-
 export function createEmptyGrid(): Grid {
     const grid: Grid = [];
     for (let row = 0; row < GRID_SIZE; row++) {
@@ -94,7 +90,7 @@ export function isEmpty(grid: Grid, pos: Position): boolean {
 
 export function getEmptyCells(grid: Grid): Position[] {
     const empty: Position[] = [];
-    for (const pos of getAllValidPositions()) {
+    for (const pos of ALL_VALID_POSITIONS) {
         if (grid[pos.row][pos.col].color === EMPTY_COLOR) empty.push(pos);
     }
     return empty;
@@ -102,7 +98,7 @@ export function getEmptyCells(grid: Grid): Position[] {
 
 export function countOccupied(grid: Grid): number {
     let occupied = 0;
-    for (const pos of getAllValidPositions()) {
+    for (const pos of ALL_VALID_POSITIONS) {
         if (grid[pos.row][pos.col].color >= 0) occupied++;
     }
     return occupied;
@@ -217,18 +213,13 @@ function collectGroupForBase(
     return { group, baseCount };
 }
 
-export function checkLines(grid: Grid): {
-    toRemove: Set<string>;
-    score: number;
-    lineCount: number;
-    jokerRemoved: number;
-} {
+export function checkLines(grid: Grid): { toRemove: Set<string>; score: number } {
     const toRemove = new Set<string>();
     let lineCount = 0;
 
     const visitedByBase = Array.from({ length: NUM_COLORS }, () => createVisitedGrid());
 
-    for (const pos of getAllValidPositions()) {
+    for (const pos of ALL_VALID_POSITIONS) {
         const color = grid[pos.row][pos.col].color;
         if (color < 0 || color === JOKER_COLOR) continue;
 
@@ -264,8 +255,6 @@ export function checkLines(grid: Grid): {
     return {
         toRemove,
         score: toRemove.size > 0 ? baseScore + lengthBonus + multiLineBonus + jokerBonus : 0,
-        lineCount,
-        jokerRemoved,
     };
 }
 
@@ -281,7 +270,7 @@ export function isBoardFull(grid: Grid): boolean {
 }
 
 export function hasAnyMove(grid: Grid): boolean {
-    for (const pos of getAllValidPositions()) {
+    for (const pos of ALL_VALID_POSITIONS) {
         if (grid[pos.row][pos.col].color < 0) continue;
         for (const next of neighbors(pos)) {
             if (grid[next.row][next.col].color === EMPTY_COLOR) return true;

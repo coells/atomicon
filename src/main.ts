@@ -15,7 +15,7 @@ import {
     type Grid,
     type Position,
 } from "./game";
-import { Renderer } from "./renderer";
+import { FRAME_MS, Renderer } from "./renderer";
 
 // ─── Sound FX + Generative Ambient Music ─────────────────────────────────────
 
@@ -492,7 +492,7 @@ type SoundMode = 0 | 1 | 2 | 3;
 
 // Adaptive frame pacing: full rate only while something is animating.
 // (Also caps 120Hz ProMotion displays at 60fps — rAF alone would run at 120.)
-const BUSY_FRAME_MS = 1000 / 60;
+const BUSY_FRAME_MS = FRAME_MS; // shared with the renderer's dt normalization
 const IDLE_FRAME_MS = 1000 / 30;
 
 class AtomiconGame {
@@ -517,7 +517,7 @@ class AtomiconGame {
     private nextDots: HTMLElement[];
     private overlay: HTMLElement;
     private finalScoreEl: HTMLElement;
-    private topScoresEl: HTMLElement | null;
+    private topScoresEl: HTMLElement;
     private soundToggleBtn: HTMLButtonElement;
 
     private readonly leaderboardKey = "atomicon_leaderboard";
@@ -532,7 +532,7 @@ class AtomiconGame {
         this.messageEl = document.getElementById("message")!;
         this.overlay = document.getElementById("overlay")!;
         this.finalScoreEl = document.getElementById("final-score")!;
-        this.topScoresEl = document.getElementById("top-scores");
+        this.topScoresEl = document.getElementById("top-scores")!;
         this.soundToggleBtn = document.getElementById("sound-toggle") as HTMLButtonElement;
         this.nextDots = [];
         for (let i = 0; i < PREVIEW_SIZE; i++) {
@@ -563,7 +563,11 @@ class AtomiconGame {
         let resizeTimer: ReturnType<typeof setTimeout> | undefined;
         const scheduleResize = (delay = 150) => {
             clearTimeout(resizeTimer);
-            resizeTimer = setTimeout(() => this.renderer.resize(), delay);
+            resizeTimer = setTimeout(() => {
+                this.renderer.resize();
+                // Repaint immediately — the loop skips frames behind the game-over overlay
+                this.renderer.draw(this.grid);
+            }, delay);
         };
         window.addEventListener("resize", () => scheduleResize());
         window.addEventListener("orientationchange", () => scheduleResize(300));
@@ -802,9 +806,7 @@ class AtomiconGame {
                     this.spawnPhase();
                     return;
                 }
-                this.phase = Phase.SELECT;
-                this.setMessage("Select a cell to move");
-                this.updateUI();
+                this.enterSelectPhase();
                 return;
 
             case Phase.SPAWN_ANIM:
@@ -813,11 +815,15 @@ class AtomiconGame {
                     this.gameOver();
                     return;
                 }
-                this.phase = Phase.SELECT;
-                this.setMessage("Select a cell to move");
-                this.updateUI();
+                this.enterSelectPhase();
                 return;
         }
+    }
+
+    private enterSelectPhase() {
+        this.phase = Phase.SELECT;
+        this.setMessage("Select a cell to move");
+        this.updateUI();
     }
 
     /** Trigger celebration effects when clearing 6+ cells */
@@ -859,7 +865,6 @@ class AtomiconGame {
     }
 
     private renderTopScores() {
-        if (!this.topScoresEl) return;
         this.topScoresEl.textContent = "";
         let highlighted = false;
         for (const value of this.getLeaderboard()) {
@@ -883,10 +888,13 @@ class AtomiconGame {
      */
     private loop = (now: number) => {
         requestAnimationFrame(this.loop);
+        // The board is static behind the game-over overlay — redrawing it would
+        // also force the overlay's backdrop blur to re-render every frame.
+        if (this.phase === Phase.GAME_OVER && !this.renderer.isBusy()) return;
         const interval = this.renderer.isBusy() ? BUSY_FRAME_MS : IDLE_FRAME_MS;
         if (now - this.lastFrame < interval - 2) return;
         this.lastFrame = now;
-        this.renderer.draw(this.grid);
+        this.renderer.draw(this.grid, now);
     };
 }
 
