@@ -6,7 +6,12 @@
     "scripts": {
         "dev": "vite",
         "build": "tsc && vite build",
-        "preview": "vite preview"
+        "preview": "vite preview",
+        "typecheck": "tsc --noEmit && tsc -p tsconfig.tests.json",
+        "test": "playwright test",
+        "test:production": "playwright test --config playwright.production.config.ts",
+        "format": "prettier --write src tests index.html *.json *.ts README.md",
+        "format:check": "prettier --check src tests index.html *.json *.ts README.md"
     },
     "pnpm": {
         "onlyBuiltDependencies": [
@@ -18,6 +23,9 @@
     "license": "ISC",
     "packageManager": "pnpm@10.18.3",
     "devDependencies": {
+        "@playwright/test": "^1.63.0",
+        "@types/node": "^26.5.1",
+        "prettier": "^3.9.6",
         "typescript": "^5.9.3",
         "vite": "^7.3.1"
     }

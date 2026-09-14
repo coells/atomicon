@@ -1,0 +1,46 @@
+{
+    "size": [1024, 512],
+    "safe_radius": 110,
+    "characters": [
+        {
+            "name": "fire",
+            "index": 0,
+            "rect": [0, 0, 256, 256]
+        },
+        {
+            "name": "ice",
+            "index": 1,
+            "rect": [256, 0, 256, 256]
+        },
+        {
+            "name": "leaf",
+            "index": 2,
+            "rect": [512, 0, 256, 256]
+        },
+        {
+            "name": "sun",
+            "index": 3,
+            "rect": [768, 0, 256, 256]
+        },
+        {
+            "name": "shadow",
+            "index": 4,
+            "rect": [0, 256, 256, 256]
+        },
+        {
+            "name": "blossom",
+            "index": 5,
+            "rect": [256, 256, 256, 256]
+        },
+        {
+            "name": "golem",
+            "index": 6,
+            "rect": [512, 256, 256, 256]
+        },
+        {
+            "name": "cosmic",
+            "index": 7,
+            "rect": [768, 256, 256, 256]
+        }
+    ]
+}
