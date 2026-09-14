@@ -11,8 +11,9 @@ body {
     margin: 0;
     isolation: isolate;
     background-image: linear-gradient(#080e251c, #080e2530), url("/background.webp");
-    /* Keep all four elemental corners visible on tall phones. */
-    background-size: 100% 100%;
+    /* Crop to fill the screen without distorting the artwork. */
+    background-size: cover;
+    background-position: center;
     background-repeat: no-repeat;
 }
 button,
@@ -59,7 +60,7 @@ summary:active {
 #app {
     position: relative;
     z-index: 1;
-    min-height: 100svh;
+    height: 100svh;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     display: flex;
     flex-direction: column;
@@ -71,6 +72,7 @@ summary:active {
     align-items: center;
     width: min(100%, 720px);
     min-height: 112px;
+    flex-shrink: 0;
     padding: 4px 12px;
     gap: 4px;
     font-variant-numeric: tabular-nums;
@@ -221,12 +223,15 @@ summary:active {
     min-width: 0;
     grid-template-columns: minmax(0, 1fr);
     display: grid;
-    place-items: center;
-    flex: 0;
-    margin-top: clamp(8px, 2svh, 24px);
+    place-items: start center;
+    flex: 1;
+    min-height: 0;
+    margin: 8px 0;
+    container-type: size;
 }
 #board-wrap {
-    width: min(100%, 720px, calc(100svh - 208px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+    /* Use the space left by the HUD and controls, including open panels. */
+    width: min(100%, 100cqh, 1365px);
     aspect-ratio: 1;
 }
 #game-canvas {
@@ -240,20 +245,20 @@ summary:active {
     flex-wrap: wrap;
     justify-content: space-evenly;
     align-items: start;
-    width: min(100%, 480px);
-    padding: 4px 12px 12px;
-    margin-top: auto;
+    width: min(100%, 320px);
+    padding: 4px 8px 8px;
+    flex-shrink: 0;
     border: 1px solid #b3a8ee55;
     border-bottom: 0;
-    border-radius: 24px 24px 0 0;
+    border-radius: 18px 18px 0 0;
     background: #0b1437e8;
     box-shadow: 0 -4px 24px #0b143744;
 }
 .controls > button {
-    min-height: 80px;
-    min-width: 80px;
+    min-height: 48px;
+    min-width: 48px;
     flex: 1;
-    font-size: 44px;
+    font-size: 30px;
 }
 .muted {
     opacity: 0.5;
@@ -314,14 +319,13 @@ input[type="checkbox"] {
     min-height: 48px;
     font-size: 14px;
 }
-@media (orientation: landscape) and (max-height: 500px) {
+#game-end {
+    flex-shrink: 0;
+}
+@media (min-width: 700px), (orientation: landscape) and (max-height: 500px) {
     .hud {
-        min-height: 60px;
+        min-height: 72px;
         grid-template-columns: 1fr auto 1fr;
-    }
-    .score,
-    .best {
-        font-size: 24px;
     }
     #next-preview {
         grid-column: 2;
@@ -330,19 +334,18 @@ input[type="checkbox"] {
     .best {
         grid-column: 3;
     }
+}
+@media (orientation: landscape) and (max-height: 500px) {
+    .hud {
+        min-height: 60px;
+    }
+    .score,
+    .best {
+        font-size: 24px;
+    }
     .next-dot {
         width: 40px;
         height: 40px;
-    }
-    #board-wrap {
-        width: min(100%, calc(100svh - 128px));
-    }
-    .controls {
-        padding-bottom: 0;
-    }
-    .controls > button {
-        min-height: 60px;
-        font-size: 36px;
     }
 }
 
@@ -356,9 +359,4 @@ input[type="checkbox"] {
     border: 1px solid #426582;
     border-radius: 18px;
     margin-bottom: 10px;
-}
-@media (max-height: 600px) {
-    .play-space {
-        margin-top: 0;
-    }
 }

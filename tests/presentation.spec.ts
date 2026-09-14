@@ -29,7 +29,7 @@ test("phone board fills available width, controls fit, and assets stay local", a
                 const box = await page.locator("#game-canvas").boundingBox();
                 return Math.round(box?.width ?? 0);
             })
-            .toBe(width < height ? width : height - 128);
+            .toBe(width < height ? width : height - 137);
         expect(
             await page.evaluate(
                 () =>
@@ -55,6 +55,65 @@ test("phone board fills available width, controls fit, and assets stay local", a
     expect(await page.locator("body").innerText()).not.toContain("little");
 });
 
+test("desktop board uses the available screen and the toolbar stays compact", async ({ page }, testInfo) => {
+    await page.goto("/");
+    await expect(page.locator("#game-canvas")).toHaveAttribute("aria-busy", "false");
+    await page.locator(".next-dot").evaluateAll((dots) => dots.forEach((dot) => dot.classList.remove("hidden")));
+    // Mac-sized windows, including the CSS viewport equivalent of 150% zoom.
+    for (const [width, height] of [
+        [1440, 960],
+        [1728, 1117],
+        [960, 640],
+        [1152, 745],
+        [2560, 1440],
+        [3000, 2400],
+    ]) {
+        await page.setViewportSize({ width, height });
+        await expect
+            .poll(() =>
+                page.locator("#game-canvas").evaluate((canvas) => Math.round(canvas.getBoundingClientRect().width)),
+            )
+            .toBe(Math.min(height - 149, 1365));
+        const board = await page.locator("#game-canvas").boundingBox();
+        const controls = await page.locator(".controls").boundingBox();
+        expect(board!.height).toBeCloseTo(board!.width, 0);
+        expect(board!.y + board!.height).toBeLessThanOrEqual(controls!.y);
+        expect(controls!.width).toBeLessThanOrEqual(320);
+        expect(controls!.height).toBeLessThanOrEqual(64);
+        for (const button of await page.locator(".controls > button").all()) {
+            const box = await button.boundingBox();
+            expect(box!.width).toBeGreaterThanOrEqual(48);
+            expect(box!.height).toBeGreaterThanOrEqual(48);
+        }
+        expect(
+            await page.evaluate(
+                () =>
+                    document.documentElement.scrollWidth <= innerWidth &&
+                    document.documentElement.scrollHeight <= innerHeight,
+            ),
+        ).toBe(true);
+    }
+    await page.setViewportSize({ width: 1440, height: 960 });
+    await page.screenshot({ path: testInfo.outputPath("desktop.png") });
+});
+
+test("background fills portrait and landscape screens without stretching", async ({ page }) => {
+    await page.goto("/");
+    for (const viewport of [
+        { width: 390, height: 844 },
+        { width: 1440, height: 960 },
+        { width: 844, height: 390 },
+    ]) {
+        await page.setViewportSize(viewport);
+        const background = await page.locator("body").evaluate((body) => {
+            const style = getComputedStyle(body);
+            return { size: style.backgroundSize, position: style.backgroundPosition };
+        });
+        expect(background.size.split(", ").every((size) => size === "cover")).toBe(true);
+        expect(background.position.split(", ").every((position) => position === "50% 50%")).toBe(true);
+    }
+});
+
 test("settings and restart stay above the toolbar without a modal or focus trap", async ({ page }) => {
     await page.goto("/");
     await page.locator("#settings-toggle").click();
@@ -66,6 +125,23 @@ test("settings and restart stay above the toolbar without a modal or focus trap"
     expect(panel!.y + panel!.height).toBeLessThanOrEqual(toggle!.y);
     await page.locator("#new-game-btn").click();
     await expect(page.locator("#restart-confirm")).toBeVisible();
+    // Expanded controls must also fit on the smallest supported phone.
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect
+        .poll(() =>
+            page.evaluate(() => {
+                const board = document.getElementById("game-canvas")!.getBoundingClientRect();
+                const controls = document.querySelector(".controls")!.getBoundingClientRect();
+                return (
+                    board.width > 0 &&
+                    board.bottom <= controls.top &&
+                    controls.bottom <= innerHeight &&
+                    document.documentElement.scrollHeight <= innerHeight &&
+                    document.documentElement.scrollWidth <= innerWidth
+                );
+            }),
+        )
+        .toBe(true);
     await page.locator("#cancel-restart-btn").click();
     await expect(page.locator("#restart-confirm")).not.toBeVisible();
     expect(await page.locator("dialog, [aria-modal=true]").count()).toBe(0);
