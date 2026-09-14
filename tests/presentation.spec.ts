@@ -124,12 +124,15 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) {
             expect(after[1] - before[1]).toBeGreaterThan(0);
             expect(after[1] - before[1]).toBeLessThanOrEqual(205);
         }
-        await page.evaluate(() => {
+        const hidden = await page.evaluate(() => {
             Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
             document.dispatchEvent(new Event("visibilitychange"));
+            // Snapshot atomically with hiding: a visible frame may legitimately
+            // run between separate browser calls, especially in WebKit.
+            return [window.testFrames, window.testPaints];
         });
         await page.clock.runFor(10000);
-        expect(await counts()).toEqual(after);
+        expect(await counts()).toEqual(hidden);
         expect(
             await page.evaluate(() => document.getAnimations().every((animation) => animation.playState === "paused")),
         ).toBe(true);

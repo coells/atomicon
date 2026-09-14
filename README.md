@@ -46,7 +46,7 @@ The board renders at up to 20 fps at rest and 30 fps during transitions, with ca
 
 `track1.m4a` and `track2.m4a` alternate with eight-second equal-power crossfades, including the return to track1. Two media elements stream AAC rather than decoding whole songs into JavaScript audio buffers. Defaults are 10% music and 50% effects; saved choices are preserved. Effects-only audio suspends after seven seconds of inactivity.
 
-Browser checks exercise touch input, phone layouts, audio overlap and suspension. They do not measure physical-device battery life.
+Browser checks exercise touch input, phone layouts, audio overlap and suspension. Audio-policy tests also cover tap-completion unlock and recovery from an interrupted context. Playwright's mobile WebKit profile does not run iOS itself: verify audible music and effects on a physical iPhone or iPad, including after app switching and with Silent Mode on and off. These tests do not measure physical-device battery life.
 
 ## Regenerate supplied assets
 

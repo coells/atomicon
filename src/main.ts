@@ -105,14 +105,21 @@ class AtomiconGame {
             this.preferences.muted = !this.preferences.muted;
             this.applyPreferences(true);
         });
-        // No AudioContext at boot. Both pointer and keyboard play unlock audio.
+        // Touch pointerdown is not an activation event on iOS. Unlock at
+        // tap completion, before the board's click handler plays an effect.
+        // Keep mouse-down support and a click fallback for assistive input.
+        const unlockAudio = () => {
+            void this.sound.unlock();
+        };
         document.addEventListener(
             "pointerdown",
-            () => {
-                void this.sound.unlock();
+            (event) => {
+                if (event.pointerType === "mouse") unlockAudio();
             },
-            { capture: true },
+            { capture: true, passive: true },
         );
+        for (const event of ["pointerup", "touchend", "click"] as const)
+            document.addEventListener(event, unlockAudio, { capture: true, passive: true });
         document.addEventListener("keydown", (event) => {
             void this.sound.unlock();
             if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;

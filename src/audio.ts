@@ -55,7 +55,9 @@ export class Soundscape {
                 return;
             }
             const ctx = this.ensureContext();
-            const resuming = ctx.state === "suspended" ? ctx.resume() : null;
+            // iOS also reports "interrupted" after device/OS interruptions.
+            // Resume synchronously in the gesture, not just from "suspended".
+            const resuming = ctx.state !== "running" && ctx.state !== "closed" ? ctx.resume() : null;
             // Authorize both media elements before the first await (Safari).
             if (this.preferences.music > 0) this.startScheduler();
             else {
