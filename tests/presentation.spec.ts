@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 
 declare global {
     interface Window {
@@ -112,6 +112,64 @@ test("background fills portrait and landscape screens without stretching", async
         expect(background.size.split(", ").every((size) => size === "cover")).toBe(true);
         expect(background.position.split(", ").every((position) => position === "50% 50%")).toBe(true);
     }
+});
+
+test("top score counters are ten percent larger in portrait and landscape", async ({ page }) => {
+    await page.goto("/");
+    for (const [width, height, score, best] of [
+        [390, 844, 35.2, 28.6],
+        [1440, 960, 35.2, 28.6],
+        [844, 390, 26.4, 26.4],
+    ]) {
+        await page.setViewportSize({ width, height });
+        expect(
+            await page.locator("#score").evaluate((node) => parseFloat(getComputedStyle(node).fontSize)),
+        ).toBeCloseTo(score);
+        expect(await page.locator("#best").evaluate((node) => parseFloat(getComputedStyle(node).fontSize))).toBeCloseTo(
+            best,
+        );
+    }
+});
+
+test("outside taps dismiss both panels without swallowing board input", async ({ page }, testInfo) => {
+    await page.addInitScript(() => {
+        Math.random = () => 0.5;
+    });
+    await page.goto("/");
+    await expect(page.locator("#game-canvas")).toHaveAttribute("aria-busy", "false");
+    const activate = (locator: Locator) => (testInfo.project.use.hasTouch ? locator.tap() : locator.click());
+    const settings = page.locator("#settings-panel");
+    const toggle = page.locator("#settings-toggle");
+    const restart = page.locator("#restart-confirm");
+    await activate(toggle);
+    await activate(page.locator("#reduce-motion"));
+    await page.locator("#music-volume").press("ArrowRight");
+    await expect(settings).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await activate(page.locator("#new-game-btn"));
+    await expect(restart).toBeVisible();
+    await expect(settings).toBeVisible();
+    await activate(page.locator(".score"));
+    await expect(settings).toBeHidden();
+    await expect(restart).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await activate(toggle);
+    await activate(page.locator("#new-game-btn"));
+    const canvas = page.locator("#game-canvas");
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error("Board is not visible");
+    const radius = (box.width - Math.min(3, box.width * 0.068) * 2) / (Math.sqrt(3) * 8 + 2.2);
+    // Select the fixed deal's row 4, column 5 using the still-expanded layout.
+    const position = { x: box.width / 2 + Math.sqrt(3) * radius, y: box.height / 2 };
+    if (testInfo.project.use.hasTouch) await canvas.tap({ position });
+    else await canvas.click({ position });
+    await expect(page.locator("#message")).toContainText("Sun selected");
+    await expect(settings).toBeHidden();
+    await expect(restart).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("#space-count")).toHaveText("54");
+    await expect(page.locator("#turn-count")).toHaveText("MOVE 01");
 });
 
 test("settings and restart stay above the toolbar without a modal or focus trap", async ({ page }) => {

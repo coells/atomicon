@@ -106,6 +106,17 @@ class AtomiconGame {
             panel.hidden = !panel.hidden;
             element("settings-toggle").setAttribute("aria-expanded", String(!panel.hidden));
         });
+        document.addEventListener("click", (event) => {
+            if (!(event.target instanceof Element) || event.target.closest(".controls")) return;
+            // Close after the board handles the click: collapsing the panels
+            // resizes the board and must not change which cell was tapped.
+            const panel = element("settings-panel");
+            if (!panel.hidden) {
+                panel.hidden = true;
+                element("settings-toggle").setAttribute("aria-expanded", "false");
+            }
+            this.restartConfirm.hidden = true;
+        });
         element("sound-toggle").addEventListener("click", () => {
             this.preferences.muted = !this.preferences.muted;
             this.applyPreferences(true);
