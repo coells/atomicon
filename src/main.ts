@@ -20,7 +20,8 @@ import {
 } from "./game";
 import { Soundscape } from "./audio";
 import { parsePreferences, parseScores, readStored, saveStored, type Preferences } from "./preferences";
-import { FRAME_MS, Renderer } from "./renderer";
+import { Renderer } from "./renderer";
+import { FrameLoop } from "./frame-loop";
 
 type Phase = "deal" | "select" | "move" | "remove" | "spawn" | "over";
 const CREATURE_NAMES = CHARACTER_NAMES;
@@ -57,7 +58,6 @@ class AtomiconGame {
     );
     private nextColors: CellColor[] = [];
     private pendingRemove: Set<number> | null = null;
-    private lastFrame = 0;
     private lastPreview = "";
     private preferences: Preferences;
     private motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -65,7 +65,12 @@ class AtomiconGame {
     private bestEl = element("best");
     private messageEl = element("message");
     private nextDots = Array.from({ length: PREVIEW_SIZE }, (_, i) => canvasElement(`next${i}`));
-    private frame: number | null = null;
+    private frames = new FrameLoop((now) => {
+        const wasBusy = this.renderer.isBusy();
+        this.renderer.draw(this.grid, now);
+        // Paint once more after completion so removed stones cannot linger.
+        return wasBusy || this.renderer.isBusy();
+    });
     private restartConfirm = element("restart-confirm");
 
     constructor() {
@@ -133,16 +138,15 @@ class AtomiconGame {
         document.addEventListener("visibilitychange", () => {
             document.body.classList.toggle("page-hidden", document.hidden);
             this.sound.handleVisibility();
-            if (this.frame !== null) cancelAnimationFrame(this.frame);
-            this.frame = null;
-            if (!document.hidden) this.requestDraw();
+            this.renderer.resetClock();
+            this.frames.setPaused(document.hidden);
         });
         this.motionQuery.addEventListener("change", () => {
             this.preferences.reducedMotion = this.motionQuery.matches;
             this.applyPreferences();
         });
         const resize = () => {
-            if (!this.renderer.resize()) return;
+            if (!this.renderer.resize() || document.hidden) return;
             // Resizing clears a canvas. Paint in the same layout cycle so an
             // orientation change never presents a blank board.
             this.renderer.draw(this.grid);
@@ -313,7 +317,7 @@ class AtomiconGame {
         this.setMessage("Making a little connection…");
     }
 
-    private handleClears(): boolean {
+    private handleClears(origin?: Position): boolean {
         const { toRemove, score } = checkLines(this.grid);
         if (!toRemove.size) {
             this.combo = 0;
@@ -328,9 +332,8 @@ class AtomiconGame {
         }
         this.pendingRemove = toRemove;
         this.phase = "remove";
-        this.renderer.startRemoveAnimation(toRemove);
+        this.renderer.startRemoveAnimation(toRemove, this.grid, origin);
         const tier = toRemove.size >= 8 ? 3 : toRemove.size >= 7 ? 2 : 1;
-        this.renderer.startCelebration(toRemove, tier);
         this.sound.effect("clear", Math.max(this.combo, tier));
         this.setMessage(
             this.combo > 1
@@ -349,7 +352,7 @@ class AtomiconGame {
                 break;
             case "move":
                 this.moveCount++;
-                if (!this.handleClears()) this.spawnPhase();
+                if (!this.handleClears(this.keyboardPos)) this.spawnPhase();
                 break;
             case "remove":
                 if (this.pendingRemove) removeMatches(this.grid, this.pendingRemove);
@@ -411,30 +414,7 @@ class AtomiconGame {
         this.setMessage("Constellation complete.");
     }
 
-    private requestDraw = () => {
-        if (this.frame === null && !document.hidden) this.frame = requestAnimationFrame(this.loop);
-    };
-
-    private loop = (now: number) => {
-        this.frame = null;
-        if (document.hidden) return;
-        // Cached sprites at 20 fps while resting, 30 fps during a move/clear.
-        // Reduced-motion mode stops scheduling entirely when the board settles.
-        const interval = this.renderer.isBusy() ? FRAME_MS * 2 : 1000 / 20;
-        const elapsed = now - this.lastFrame;
-        if (elapsed < interval) {
-            this.requestDraw();
-            return;
-        }
-        // Carry the remainder so display refresh timing cannot speed up the
-        // target rate or round every frame down to a slower fixed cadence.
-        this.lastFrame = now - (elapsed % interval);
-        const wasBusy = this.renderer.isBusy();
-        this.renderer.draw(this.grid, now);
-        // Flush the final settled frame after an animation completes.
-        if (wasBusy || this.renderer.isBusy() || (!this.preferences.reducedMotion && this.phase !== "over"))
-            this.requestDraw();
-    };
+    private requestDraw = () => this.frames.request();
 }
 
 new AtomiconGame();

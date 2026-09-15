@@ -1,4 +1,5 @@
 import { CharacterArt } from "./characters";
+import { ConnectionEffect, ConnectionSprites } from "./connection-effect";
 import {
     ALL_VALID_POSITIONS,
     cellIndex,
@@ -90,11 +91,10 @@ export class Renderer {
 
     /* time-based animation clock (frame-rate independent) */
     private timeT = 0; // advances T_RATE per second
-    private lastNow = 0;
+    private lastNow: number | null = null;
     private dtF = 1; // delta time in 60fps-frame units
 
     /* cached rendering layers/sprites — size-dependent ones rebuilt on resize */
-    private bgLayer: HTMLCanvasElement | null = null;
     private tileLayer: HTMLCanvasElement | null = null;
     private previewTargets = new Map<HTMLCanvasElement, CellColor>();
     private art = new CharacterArt(() => {
@@ -103,6 +103,7 @@ export class Renderer {
     });
     /* fixed 64px sprites — size-independent, never invalidated */
     private glowSpriteCache = new Map<string, HTMLCanvasElement>();
+    private connectionSprites = new ConnectionSprites([...CELL_THEMES.map((theme) => theme.core), JOKER_THEME.core]);
 
     private reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     private hoverPos: Position | null = null;
@@ -116,26 +117,11 @@ export class Renderer {
     private glintCell = -1;
     private pathAnim: { path: Position[]; progress: number; color: CellColor } | null = null;
     private spawnAnim: { keys: Set<number>; progress: number } | null = null;
-    private removeAnim: { positions: Set<number>; progress: number } | null = null;
+    private removeAnim: ConnectionEffect | null = null;
 
     /** Trail particles emitted during path movement */
     private trailParticles: { x: number; y: number; vx: number; vy: number; life: number; color: string }[] = [];
     private trailEmitAccum = 0;
-
-    /** Celebration particles for big clears */
-    private celebrationParticles: {
-        x: number;
-        y: number;
-        vx: number;
-        vy: number;
-        life: number;
-        maxLife: number;
-        color: string;
-        size: number;
-        type: "spark" | "ring" | "star";
-    }[] = [];
-    private screenShake = 0;
-    private flashAlpha = 0;
 
     onAnimationComplete: (() => void) | null = null;
     onInvalidate: (() => void) | null = null;
@@ -205,26 +191,14 @@ export class Renderer {
             this.centers[cellIndex(pos)] = { x, y };
         }
 
-        // Size-dependent caches must be rebuilt (the 64px glow/ambient sprites
-        // are size-independent and survive resizes).
+        // Fixed-size glow sprites survive resizes; only the board layer changes.
         this.buildBoardLayers();
         return true;
     }
 
-    /**
-     * Pre-render the static board into two layers: background gradient and hex
-     * tiles. Two layers (not one) so the ambient particles can be drawn between
-     * them — dimly shimmering through the 86%-opaque tiles, as when the board
-     * was vector-painted per frame — while still costing only two blits.
-     */
+    /** Cache the hex wells in one layer; transparent corners reveal the CSS background. */
     private buildBoardLayers() {
         const px = Math.round(this.boardSize * this.dpr);
-        if (!this.bgLayer) this.bgLayer = document.createElement("canvas");
-        this.bgLayer.width = px;
-        this.bgLayer.height = px;
-        const bctx = this.bgLayer.getContext("2d")!;
-        bctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-
         if (!this.tileLayer) this.tileLayer = document.createElement("canvas");
         this.tileLayer.width = px;
         this.tileLayer.height = px;
@@ -338,21 +312,21 @@ export class Renderer {
         this.reducedMotion = reduced;
         this.onInvalidate?.();
         this.trailParticles = [];
-        this.celebrationParticles = [];
-        this.screenShake = 0;
-        this.flashAlpha = 0;
+    }
+
+    /** Exclude time spent idle or hidden from the next animation step. */
+    resetClock() {
+        this.lastNow = null;
     }
 
     reset() {
+        this.resetClock();
         this.canvas.setAttribute("aria-busy", "false");
         this.pathAnim = null;
         this.spawnAnim = null;
         this.removeAnim = null;
         this.trailParticles = [];
-        this.celebrationParticles = [];
         this.trailEmitAccum = 0;
-        this.screenShake = 0;
-        this.flashAlpha = 0;
         this.setSelected(null);
     }
 
@@ -364,96 +338,25 @@ export class Renderer {
     }
 
     startPathAnimation(path: Position[], color: CellColor) {
+        this.resetClock();
         this.canvas.setAttribute("aria-busy", "true");
         this.pathAnim = { path, progress: 0, color };
         this.onInvalidate?.();
     }
 
     startSpawnAnimation(positions: Position[]) {
+        this.resetClock();
         this.canvas.setAttribute("aria-busy", "true");
         this.spawnAnim = { keys: new Set(positions.map(cellIndex)), progress: 0 };
         this.onInvalidate?.();
     }
 
-    startRemoveAnimation(positions: Set<number>) {
+    startRemoveAnimation(positions: Set<number>, grid: Grid, origin?: Position) {
+        this.resetClock();
         this.canvas.setAttribute("aria-busy", "true");
-        this.removeAnim = { positions, progress: 0 };
+        this.removeAnim = new ConnectionEffect(positions, grid, origin);
+        this.trailParticles = [];
         this.onInvalidate?.();
-    }
-
-    /**
-     * Start a celebration effect.
-     * @param positions  Set of cell indices being cleared
-     * @param tier  1 = 6 cells, 2 = 7 cells, 3 = 8+ cells
-     */
-    startCelebration(positions: Set<number>, tier: number) {
-        if (this.reducedMotion) return;
-        // Collect center positions of cleared cells
-        const origins: { x: number; y: number }[] = [];
-        for (const k of positions) {
-            const c = this.centers[k];
-            if (c) origins.push(c);
-        }
-        if (origins.length === 0) return;
-
-        // Center of mass
-        const cx = origins.reduce((s, p) => s + p.x, 0) / origins.length;
-        const cy = origins.reduce((s, p) => s + p.y, 0) / origins.length;
-
-        const particleCount = tier === 1 ? 12 : tier === 2 ? 20 : 28;
-        const speedBase = tier === 1 ? 2.5 : tier === 2 ? 4 : 6;
-        const palette = CELL_THEMES.map((t) => t.core).concat(["#FFFFFF", "#FFE87C"]);
-
-        for (let i = 0; i < particleCount; i++) {
-            // Emit from random cleared cells or center
-            const origin = Math.random() > 0.4 ? origins[Math.floor(Math.random() * origins.length)] : { x: cx, y: cy };
-            const angle = Math.random() * Math.PI * 2;
-            const speed = (speedBase * 0.4 + Math.random() * speedBase) * (tier >= 3 ? 1.2 : 1);
-            const life = 0.6 + Math.random() * (tier >= 3 ? 1.2 : tier >= 2 ? 0.9 : 0.6);
-            const type =
-                tier >= 3 && Math.random() > 0.7 ? "star" : tier >= 2 && Math.random() > 0.8 ? "ring" : "spark";
-            this.celebrationParticles.push({
-                x: origin.x + (Math.random() - 0.5) * 8,
-                y: origin.y + (Math.random() - 0.5) * 8,
-                vx: Math.cos(angle) * speed,
-                vy: Math.sin(angle) * speed - (tier >= 2 ? 1.5 : 0),
-                life,
-                maxLife: life,
-                color: palette[Math.floor(Math.random() * palette.length)],
-                size: 2 + Math.random() * (tier >= 3 ? 5 : tier >= 2 ? 3.5 : 2),
-                type,
-            });
-        }
-
-        // Expanding ring particles for tier 2+
-        if (tier >= 2) {
-            const ringCount = tier >= 3 ? 3 : 1;
-            for (let r = 0; r < ringCount; r++) {
-                const segments = 8;
-                for (let i = 0; i < segments; i++) {
-                    const angle = (i / segments) * Math.PI * 2;
-                    const speed = (3 + r * 2) * (tier >= 3 ? 1.5 : 1);
-                    this.celebrationParticles.push({
-                        x: cx,
-                        y: cy,
-                        vx: Math.cos(angle) * speed,
-                        vy: Math.sin(angle) * speed,
-                        life: 0.5 + r * 0.15,
-                        maxLife: 0.5 + r * 0.15,
-                        color: "#FFFFFF",
-                        size: 1.5,
-                        type: "ring",
-                    });
-                }
-            }
-        }
-
-        // Screen flash
-        this.flashAlpha = tier >= 3 ? 0.1 : tier >= 2 ? 0.055 : 0;
-
-        // Screen shake for tier 3
-        if (tier >= 3) this.screenShake = 2;
-        else if (tier >= 2) this.screenShake = 1;
     }
 
     /** A discrete board animation (move/spawn/remove) is in progress. */
@@ -463,13 +366,7 @@ export class Renderer {
 
     /** True while any animation/effect needs a full frame rate. */
     isBusy(): boolean {
-        return (
-            this.isAnimating() ||
-            this.trailParticles.length > 0 ||
-            this.celebrationParticles.length > 0 ||
-            this.screenShake > 0 ||
-            this.flashAlpha > 0
-        );
+        return this.isAnimating() || this.trailParticles.length > 0;
     }
 
     private chooseIdleActors(grid: Grid) {
@@ -491,7 +388,7 @@ export class Renderer {
     draw(grid: Grid, now = performance.now()) {
         // Clamp dt ≥ 0: rAF timestamps can trail performance.now() used by the
         // resize repaint, and a negative dt would invert the decay factors.
-        const dtMs = this.lastNow ? Math.min(100, Math.max(0, now - this.lastNow)) : FRAME_MS;
+        const dtMs = this.lastNow === null ? FRAME_MS : Math.min(100, Math.max(0, now - this.lastNow));
         this.lastNow = now;
         this.dtF = dtMs / FRAME_MS;
         // Fixed creature poses avoid continuously growing the sprite cache.
@@ -501,21 +398,8 @@ export class Renderer {
         const ctx = this.ctx;
         ctx.clearRect(0, 0, this.boardSize, this.boardSize);
 
-        // Screen shake offset
         ctx.save();
-        if (this.screenShake > 0.1) {
-            const sx = (Math.random() - 0.5) * this.screenShake * 2;
-            const sy = (Math.random() - 0.5) * this.screenShake * 2;
-            ctx.translate(sx, sy);
-            this.screenShake *= 0.88 ** this.dtF;
-            if (this.screenShake < 0.1) this.screenShake = 0;
-        }
 
-        // Static board, two blits with the ambient particles sandwiched between:
-        // they shimmer dimly through the 86%-opaque tiles instead of floating
-        // over the board.
-        ctx.drawImage(this.bgLayer!, 0, 0, this.boardSize, this.boardSize);
-        // No ambient particle field: the board remains still between moves.
         ctx.drawImage(this.tileLayer!, 0, 0, this.boardSize, this.boardSize);
         this.drawCenterEmblem();
         this.drawInteraction();
@@ -530,16 +414,9 @@ export class Renderer {
             const center = this.centers[idx]!;
             const seed = idx;
 
-            if (this.removeAnim && this.removeAnim.positions.has(idx)) {
-                this.drawMicroCell(
-                    center.x,
-                    center.y,
-                    color,
-                    1 - this.removeAnim.progress,
-                    this.reducedMotion ? 1 : 1 - this.removeAnim.progress * 0.35,
-                    false,
-                    seed,
-                );
+            const clearing = this.removeAnim?.appearance(idx, this.reducedMotion);
+            if (clearing) {
+                this.drawMicroCell(center.x, center.y, color, clearing.alpha, clearing.scale, false, seed);
                 continue;
             }
 
@@ -574,19 +451,11 @@ export class Renderer {
         }
 
         this.updateAndDrawTrailParticles();
-        this.updateAndDrawCelebrationParticles();
-
-        // Flash overlay
-        if (this.flashAlpha > 0.005) {
-            ctx.fillStyle = `rgba(255, 255, 255, ${this.flashAlpha})`;
-            ctx.fillRect(-20, -20, this.boardSize + 40, this.boardSize + 40);
-            this.flashAlpha *= 0.88 ** this.dtF;
-            if (this.flashAlpha < 0.005) this.flashAlpha = 0;
-        }
+        this.removeAnim?.draw(ctx, this.centers, this.hexRadius, this.reducedMotion, this.connectionSprites);
 
         this.updateAnimations();
         this.selectedBounce += 0.14 * this.dtF;
-        ctx.restore(); // end screen shake
+        ctx.restore();
     }
 
     private drawCenterEmblem() {
@@ -644,23 +513,7 @@ export class Renderer {
             ctx.stroke();
             ctx.setLineDash([]);
         }
-        if (this.removeAnim && !this.reducedMotion) {
-            const progress = this.removeAnim.progress;
-            ctx.strokeStyle = `rgba(222,235,182,${(1 - progress) * 0.8})`;
-            ctx.lineWidth = 1.5;
-            for (const index of this.removeAnim.positions) {
-                const p = this.centers[index];
-                if (!p) continue;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, this.hexRadius * (0.55 + progress * 0.7), 0, Math.PI * 2);
-                ctx.stroke();
-            }
-        }
     }
-
-    /** Advance ambient color cycling timer */
-
-    /** Get the current ambient particle color, blended between palette entries */
 
     /** Render a soft radial glow (inner color fading to outer) into a 64px sprite. */
     private buildGlowSprite(inner: string, outer: string): HTMLCanvasElement {
@@ -676,8 +529,6 @@ export class Renderer {
         sctx.fillRect(0, 0, size, size);
         return c;
     }
-
-    /** Cached soft-glow dot for ambient particles; rebuilt only when the color changes. */
 
     /** Cached radial glow sprite per particle color (theme cores, white, gold). */
     private getGlowSprite(color: string): HTMLCanvasElement {
@@ -784,76 +635,6 @@ export class Renderer {
         ctx.globalAlpha = 1;
     }
 
-    /** Update and render celebration particles */
-    private updateAndDrawCelebrationParticles() {
-        const ctx = this.ctx;
-        const friction = 0.985 ** this.dtF;
-        for (let i = this.celebrationParticles.length - 1; i >= 0; i--) {
-            const p = this.celebrationParticles[i];
-            p.x += p.vx * this.dtF;
-            p.y += p.vy * this.dtF;
-            p.vy += 0.06 * this.dtF; // gravity
-            p.vx *= friction;
-            p.vy *= friction;
-            p.life -= 0.016 * this.dtF;
-            if (p.life <= 0) {
-                this.celebrationParticles.splice(i, 1);
-                continue;
-            }
-
-            const t = p.life / p.maxLife; // 1 → 0
-            const alpha = t > 0.3 ? 1 : t / 0.3; // fade out in last 30%
-
-            if (p.type === "star") {
-                // Draw a small 4-point star
-                ctx.save();
-                ctx.translate(p.x, p.y);
-                ctx.rotate(p.life * 8);
-                const s = p.size * (0.5 + t * 0.5);
-                // Soft glow behind the star (cached sprite instead of shadowBlur —
-                // the only remaining per-frame Gaussian blur was here)
-                const glowR = s * 3;
-                ctx.globalAlpha = alpha * 0.8;
-                ctx.drawImage(this.getGlowSprite(p.color), -glowR, -glowR, glowR * 2, glowR * 2);
-                ctx.globalAlpha = alpha;
-                ctx.fillStyle = p.color;
-                ctx.beginPath();
-                for (let j = 0; j < 8; j++) {
-                    const a = (j / 8) * Math.PI * 2;
-                    const rr = j % 2 === 0 ? s : s * 0.4;
-                    if (j === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
-                    else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
-                }
-                ctx.closePath();
-                ctx.fill();
-                ctx.restore();
-            } else if (p.type === "ring") {
-                ctx.globalAlpha = alpha * 0.6;
-                ctx.strokeStyle = p.color;
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, p.size * (1 - t) * 3 + 1, 0, Math.PI * 2);
-                ctx.stroke();
-                ctx.globalAlpha = 1;
-            } else {
-                // spark
-                const r = p.size * (0.3 + t * 0.7);
-                // Outer glow (cached sprite instead of per-particle gradient)
-                const glowR = r * 3;
-                ctx.globalAlpha = alpha * 0.8;
-                ctx.drawImage(this.getGlowSprite(p.color), p.x - glowR, p.y - glowR, glowR * 2, glowR * 2);
-                // Bright core
-                ctx.globalAlpha = alpha * 0.9;
-                ctx.fillStyle = "#ffffff";
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, r * 0.6, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.globalAlpha = 1;
-            }
-        }
-        ctx.globalAlpha = 1;
-    }
-
     private updateAnimations() {
         let finished = false;
 
@@ -875,12 +656,9 @@ export class Renderer {
             }
         }
 
-        if (this.removeAnim) {
-            this.removeAnim.progress += 0.068 * this.dtF;
-            if (this.removeAnim.progress >= 1) {
-                this.removeAnim = null;
-                finished = true;
-            }
+        if (this.removeAnim?.advance(this.dtF * FRAME_MS)) {
+            this.removeAnim = null;
+            finished = true;
         }
 
         if (finished && !this.isAnimating()) {

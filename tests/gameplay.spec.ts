@@ -135,6 +135,27 @@ test("a full session ends with a record and can be replayed", async ({ page }, t
     await expect(page.locator("#turn-count")).toHaveText("MOVE 01");
 });
 
+test("restarting during a lightning clear cancels its pending removal", async ({ page }) => {
+    await page.clock.install();
+    await page.clock.pauseAt(Date.now() + 1000);
+    await choose(page, { row: 0, col: 8 });
+    await expect
+        .poll(async () => {
+            await page.clock.runFor(50);
+            return page.locator("#score").textContent();
+        })
+        .toBe("10");
+    await expect(page.locator("#game-canvas")).toHaveAttribute("aria-busy", "true");
+    await expect(page.locator("#space-count")).toHaveText("54");
+    await page.locator("#new-game-btn").click();
+    await page.locator("#confirm-restart-btn").click();
+    await page.clock.runFor(1500);
+    await expect(page.locator("#game-canvas")).toHaveAttribute("aria-busy", "false");
+    await expect(page.locator("#score")).toHaveText("0");
+    await expect(page.locator("#space-count")).toHaveText("54");
+    await expect(page.locator("#turn-count")).toHaveText("MOVE 01");
+});
+
 test("a restart during a long move cannot deliver an old animation callback", async ({ page }) => {
     await choose(page, { row: 0, col: 8 });
     await page.locator("#new-game-btn").click();

@@ -151,7 +151,7 @@ test("settings and restart stay above the toolbar without a modal or focus trap"
 });
 
 for (const reducedMotion of ["reduce", "no-preference"] as const) {
-    test(`idle painting is capped and background activity stops (${reducedMotion})`, async ({ page }) => {
+    test(`idle painting stops and input wakes the board (${reducedMotion})`, async ({ page }) => {
         await page.emulateMedia({ reducedMotion });
         await page.clock.install();
         await page.addInitScript(() => {
@@ -193,13 +193,14 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) {
         const before = await counts();
         await page.clock.runFor(10000);
         const after = await counts();
-        if (reducedMotion === "reduce") {
-            expect(after).toEqual(before);
-            expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
-        } else {
-            expect(after[1] - before[1]).toBeGreaterThan(0);
-            expect(after[1] - before[1]).toBeLessThanOrEqual(205);
-        }
+        expect(after).toEqual(before);
+        if (reducedMotion === "reduce") expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+        await page.locator("#game-canvas").press("Escape");
+        await page.clock.runFor(100);
+        const awakened = await counts();
+        expect(awakened[1]).toBeGreaterThan(after[1]);
+        await page.clock.runFor(10000);
+        expect(await counts()).toEqual(awakened);
         const hidden = await page.evaluate(() => {
             Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
             document.dispatchEvent(new Event("visibilitychange"));
