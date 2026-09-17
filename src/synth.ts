@@ -58,3 +58,46 @@ export function scheduleVoice(
         return osc;
     });
 }
+
+/** Approved rounded movement pair: four bounded sources, with a short held body. */
+export function scheduleMovement(ctx: BaseAudioContext, destination: AudioNode, at: number): OscillatorNode[] {
+    const variation = Math.random() * 2 - 1;
+    return [62, 69].flatMap((midi, index) => {
+        const frequency = midiToFrequency(midi) * 2 ** ((variation * 2) / 1200);
+        const start = at + index * 0.09;
+        const level = index === 0 ? 0.115 : 0.08;
+        return [false, true].map((overtone) => {
+            const osc = ctx.createOscillator();
+            const filter = ctx.createBiquadFilter();
+            const gain = ctx.createGain();
+            const pan = ctx.createStereoPanner();
+            const duration = overtone ? 0.48 * 0.55 : 0.48;
+            const peak = overtone ? level * 0.12 : level;
+            osc.type = "sine";
+            osc.frequency.value = frequency * (overtone ? 2.001 : 1);
+            filter.type = "lowpass";
+            filter.frequency.value = 3200;
+            filter.Q.value = 0.55;
+            pan.pan.value = overtone ? 0 : (index - 0.5) * 0.1;
+            gain.gain.setValueAtTime(0, start);
+            gain.gain.linearRampToValueAtTime(peak, start + 0.018);
+            gain.gain.exponentialRampToValueAtTime(peak * 0.45, start + duration * (overtone ? 0.16 : 0.24));
+            gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+            gain.gain.linearRampToValueAtTime(0, start + duration + 0.02);
+            osc.connect(filter).connect(gain).connect(pan).connect(destination);
+            osc.addEventListener(
+                "ended",
+                () => {
+                    osc.disconnect();
+                    filter.disconnect();
+                    gain.disconnect();
+                    pan.disconnect();
+                },
+                { once: true },
+            );
+            osc.start(start);
+            osc.stop(start + duration + 0.025);
+            return osc;
+        });
+    });
+}

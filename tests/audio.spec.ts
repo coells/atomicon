@@ -69,7 +69,7 @@ test("audio defaults are quiet, gesture-gated, and suspend on mute/background", 
     expect(errors).toEqual([]);
 });
 
-test("both recorded tracks overlap at each join, including the wrap back to track1", async ({ page }) => {
+test("four songs crossfade in order through two decoders, including track4 back to track1", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("console", (message) => {
@@ -86,7 +86,14 @@ test("both recorded tracks overlap at each join, including the wrap back to trac
             ),
         )
         .toBe(true);
-    for (const index of [0, 1]) {
+    for (const song of [0, 1, 2, 3]) {
+        const index = song % 2;
+        await expect
+            .poll(() => page.evaluate(() => window.testMusicTracks.every((track) => track.readyState >= 2)))
+            .toBe(true);
+        expect(await page.evaluate((i) => new URL(window.testMusicTracks[i].src).pathname, index)).toBe(
+            `/music/track${song + 1}.m4a`,
+        );
         await expect
             .poll(() =>
                 page.evaluate((i) => !window.testMusicTracks[i].paused && window.testMusicTracks[1 - i].paused, index),
@@ -104,6 +111,10 @@ test("both recorded tracks overlap at each join, including the wrap back to trac
             )
             .toBe(true);
     }
+    expect(await page.evaluate(() => window.testMusicTracks.map((track) => new URL(track.src).pathname))).toEqual([
+        "/music/track1.m4a",
+        "/music/track2.m4a",
+    ]);
     expect(await page.evaluate(() => window.testAudioContexts.length)).toBe(1);
     expect(errors).toEqual([]);
 });
@@ -178,6 +189,9 @@ test("muting or hiding during a crossfade resumes only the incoming track", asyn
                 ),
             )
             .toBe(true);
+        expect(await page.evaluate((index) => new URL(window.testMusicTracks[index].src).pathname, outgoing)).toBe(
+            `/music/track${outgoing + 3}.m4a`,
+        );
     }
     expect(await page.evaluate(() => window.testAudioContexts.length)).toBe(1);
     expect(errors).toEqual([]);

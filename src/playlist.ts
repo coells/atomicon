@@ -1,13 +1,16 @@
 const CROSSFADE_SECONDS = 8;
+const TRACK_COUNT = 4;
+const trackUrl = (index: number) => `${import.meta.env.BASE_URL}music/track${index + 1}.m4a`;
 
 interface Track {
     audio: HTMLAudioElement;
     gain: GainNode;
     source: MediaElementAudioSourceNode;
+    song: number;
 }
 
-/** Two streaming decoders, never whole-track AudioBuffers. Overlap both joins,
- * including track2 → track1; pause media and cancel fades when hidden/muted. */
+/** Four songs through two streaming decoders, never whole-track AudioBuffers.
+ * Crossfade every join, including 4 → 1; stop fades when hidden/muted. */
 export class MusicPlaylist {
     private tracks: [Track, Track];
     private active = 0;
@@ -23,7 +26,7 @@ export class MusicPlaylist {
         destination: AudioNode,
     ) {
         const makeTrack = (index: number): Track => {
-            const audio = new Audio(`${import.meta.env.BASE_URL}music/track${index + 1}.m4a`);
+            const audio = new Audio(trackUrl(index));
             audio.preload = "auto";
             audio.setAttribute("playsinline", "");
             const source = context.createMediaElementSource(audio);
@@ -34,7 +37,7 @@ export class MusicPlaylist {
             audio.addEventListener("ended", () => {
                 if (this.running && this.active === index) this.crossfade();
             });
-            return { audio, gain, source };
+            return { audio, gain, source, song: index };
         };
         this.tracks = [makeTrack(0), makeTrack(1)];
     }
@@ -94,6 +97,18 @@ export class MusicPlaylist {
             this.setGain(track, index === this.active ? 1 : 0);
             if (index !== this.active) track.audio.currentTime = 0;
         }
+        this.prepareStandby();
+    }
+
+    private prepareStandby() {
+        const standby = this.tracks[1 - this.active];
+        const song = (this.tracks[this.active].song + 1) % TRACK_COUNT;
+        if (standby.song === song) return;
+        // Reuse the already-authorized silent element, including when a fade was
+        // interrupted. The incoming song is now active; queue its successor.
+        standby.song = song;
+        standby.audio.src = trackUrl(song);
+        standby.audio.load();
     }
 
     private setGain(track: Track, value: number) {
@@ -152,6 +167,7 @@ export class MusicPlaylist {
                         outgoing.audio.currentTime = 0;
                         this.setGain(outgoing, 0);
                         this.setGain(incoming, 1);
+                        this.prepareStandby();
                         this.transitioning = false;
                         this.fadeTimer = undefined;
                     },

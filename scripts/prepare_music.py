@@ -6,7 +6,7 @@
 
 The supplied .m4a originals contain Opus. Preserve them under art/music/source;
 encode AAC for Safari compatibility and remove leading near-silence only.
-Playback crossfades live, so there is no hard edit between the two recordings.
+Playback crossfades live, so there is no hard edit between recordings.
 """
 
 import subprocess
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     output = ROOT / "public/music"
     output.mkdir(parents=True, exist_ok=True)
-    for name in ("track1", "track2"):
+    for name in ("track1", "track2", "track3", "track4"):
         source = ROOT / "art/music/source" / f"{name}.m4a"
         if not source.is_file():
             raise FileNotFoundError(source)

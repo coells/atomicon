@@ -1,6 +1,6 @@
 import { type MusicNote } from "./music";
 import { MusicPlaylist } from "./playlist";
-import { scheduleVoice } from "./synth";
+import { scheduleMovement, scheduleVoice } from "./synth";
 
 export interface AudioPreferences {
     music: number;
@@ -177,10 +177,17 @@ export class Soundscape {
         if (!this.context || this.context.state !== "running" || !this.audible || this.preferences.effects === 0)
             return;
         this.suspendAfterEffects();
+        if (kind === "move") {
+            if (!this.effectsBus) return;
+            for (const osc of scheduleMovement(this.context, this.effectsBus, this.context.currentTime + 0.008)) {
+                this.sources.set(osc, "effects");
+                osc.addEventListener("ended", () => this.sources.delete(osc), { once: true });
+            }
+            return;
+        }
         const at = this.context.currentTime + 0.005;
-        const melodies: Record<Effect, number[]> = {
+        const melodies: Record<Exclude<Effect, "move">, number[]> = {
             select: [81],
-            move: [62, 69],
             spawn: [74, 78],
             blocked: [47, 45],
             clear: strength >= 2 ? [74, 78, 81, 85, 90] : [74, 78, 81, 86],

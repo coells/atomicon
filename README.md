@@ -22,7 +22,7 @@ pnpm format:check
 pnpm build
 ```
 
-Tests cover desktop Chromium and touch-emulated Chromium and WebKit at phone and tablet sizes. They include full games, scoring, restart cancellation, keyboard controls, preferences, particle variation, visual feedback, idle canvas sleep, audio suspension, and crossfades between the two recorded music tracks. Screenshots and failure traces go to `test-results/`.
+Tests cover desktop Chromium and touch-emulated Chromium and WebKit at phone and tablet sizes. They include full games, scoring, restart cancellation, keyboard controls, preferences, particle variation, visual feedback, idle canvas sleep, audio suspension, and crossfades through all four recorded music tracks. Screenshots and failure traces go to `test-results/`.
 
 `pnpm test:production` builds and smoke-tests the deployed asset paths. `pnpm preview` serves the production build at `/atomicon/`, the existing GitHub Pages base path.
 
@@ -47,7 +47,9 @@ Energy use takes priority over continuous animation. The canvas sleeps at rest, 
 
 Selection greetings last 320 ms; rejected destinations fade over 420 ms. Route and destination feedback reuse the movement frames. Clears keep the connecting lightning, add a small bounce and fade, and resume play after 620 ms. A decorative glow finishes within about one second of the clear starting. Each clear has at most 96 elemental particles, with independent curves and a separate drift for each creature. Shapes and halos are cached; randomness is sampled before drawing rather than on every frame. Reduced motion removes greetings and moving particles, uses steady route markers, and keeps opacity-only clear and rejection feedback.
 
-`track1.m4a` and `track2.m4a` alternate with eight-second equal-power crossfades, including the return to track1. Two media elements stream AAC rather than decoding whole songs into JavaScript audio buffers. Defaults are 10% music and 50% effects; saved choices are preserved. Effects-only audio suspends after seven seconds of inactivity.
+`track1.m4a` through `track4.m4a` play in order with eight-second equal-power crossfades, including track4 → track1. The recordings total 14 minutes 18 seconds; a full loop is about 13 minutes 46 seconds with the overlaps. Two media elements stream AAC rather than decoding whole songs into JavaScript audio buffers. After each fade, the silent element loads the next song. Defaults are 10% music and 50% effects; saved choices are preserved. Effects-only audio suspends after seven seconds of inactivity.
+
+Movement uses a rounded two-note cue lasting about 0.6 seconds before the room tail. There is no separate arrival cue. Match, selection, spawn, blocked-move, and game-over effects retain their original sounds.
 
 Browser checks exercise touch input, phone layouts, audio overlap and suspension. Audio-policy tests also cover tap-completion unlock and recovery from an interrupted context. Playwright's mobile WebKit profile does not run iOS itself: verify audible music and effects on a physical iPhone or iPad, including after app switching and with Silent Mode on and off. These tests do not measure physical-device battery life.
 
@@ -61,6 +63,8 @@ uv run scripts/prepare_music.py
 ```
 
 The image script normalizes transparent sprites, builds the atlas and a contact sheet, and compresses the background. The music script converts the supplied Opus-in-M4A files to AAC-in-M4A for Safari compatibility and trims leading near-silence. Both scripts pin their own dependencies.
+
+The original soundtrack pair is now tracks 1 and 3. `Quiet Rain.m4a` is track 2; `Quiet Rain (1).m4a` is track 4. Unconverted originals are retained in `art/music/source/`.
 
 - `src/game.ts`: original board, matching, pathfinding, and scoring rules.
 - `src/renderer.ts`: board materials, creature sprites, touch feedback, path previews, and effects.

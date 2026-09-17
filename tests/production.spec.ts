@@ -27,5 +27,13 @@ test("the production build boots and loads all local assets under /atomicon/", a
             ),
         )
         .toBe(true);
+    // Later songs are deliberately not preloaded into additional media elements.
+    for (const number of [3, 4]) {
+        const response = await page.request.get(new URL(`music/track${number}.m4a`, page.url()).href, {
+            headers: { Range: "bytes=0-1023" },
+        });
+        expect(response.ok()).toBe(true);
+        expect(response.headers()["content-type"]).toContain("audio/");
+    }
     expect(failures).toEqual([]);
 });
