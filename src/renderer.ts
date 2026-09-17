@@ -103,6 +103,7 @@ export class Renderer {
     });
     /* fixed 64px sprites — size-independent, never invalidated */
     private glowSpriteCache = new Map<string, HTMLCanvasElement>();
+    private selectionHaloCache = new Map<string, HTMLCanvasElement>();
     private connectionSprites = new ConnectionSprites([...CELL_THEMES.map((theme) => theme.core), JOKER_THEME.core]);
 
     private reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -110,14 +111,17 @@ export class Renderer {
     private previewPath: Position[] | null = null;
     private hoverBlocked = false;
     private selectedPos: Position | null = null;
-    private selectedBounce = 0;
+    private selectionProgress = 1;
+    private selectionGreeting = { tilt: 0, squash: 0 };
+    private blockedFeedback: { pos: Position; progress: number } | null = null;
     private wiggleCycle = -1;
     private glintCycle = -1;
     private wiggleCell = -1;
     private glintCell = -1;
-    private pathAnim: { path: Position[]; progress: number; color: CellColor } | null = null;
+    private pathAnim: { path: Position[]; progress: number; elapsedMs: number; color: CellColor } | null = null;
     private spawnAnim: { keys: Set<number>; progress: number } | null = null;
     private removeAnim: ConnectionEffect | null = null;
+    private clearAfterglow: ConnectionEffect | null = null;
 
     /** Trail particles emitted during path movement */
     private trailParticles: { x: number; y: number; vx: number; vy: number; life: number; color: string }[] = [];
@@ -297,7 +301,18 @@ export class Renderer {
 
     setSelected(pos: Position | null) {
         this.selectedPos = pos;
-        this.selectedBounce = 0;
+        this.blockedFeedback = null;
+        this.selectionProgress = pos && !this.reducedMotion ? 0 : 1;
+        if (this.selectionProgress === 0) {
+            // Pick once per selection, not per frame. Both gestures use the existing
+            // 320 ms pulse and return to the original pose without delaying input.
+            const tilt = Math.random() < 0.5;
+            const direction = Math.random() < 0.5 ? -1 : 1;
+            const strength = 0.8 + Math.random() * 0.2;
+            this.selectionGreeting.tilt = tilt ? direction * 0.12 * strength : 0;
+            this.selectionGreeting.squash = tilt ? 0 : 0.075 * strength;
+        }
+        this.resetClock();
         this.setHover(null);
     }
 
@@ -308,8 +323,21 @@ export class Renderer {
         this.onInvalidate?.();
     }
 
+    /** A rejected tap is decoration only: keep selection and input available. */
+    showBlockedDestination(pos: Position) {
+        this.resetClock();
+        this.setHover(null);
+        // Repeated taps replace the one effect rather than accumulating animations.
+        this.blockedFeedback = { pos, progress: 0 };
+        this.onInvalidate?.();
+    }
+
     setReducedMotion(reduced: boolean) {
         this.reducedMotion = reduced;
+        if (reduced) {
+            this.clearAfterglow = null;
+            this.selectionProgress = 1;
+        }
         this.onInvalidate?.();
         this.trailParticles = [];
     }
@@ -325,6 +353,7 @@ export class Renderer {
         this.pathAnim = null;
         this.spawnAnim = null;
         this.removeAnim = null;
+        this.clearAfterglow = null;
         this.trailParticles = [];
         this.trailEmitAccum = 0;
         this.setSelected(null);
@@ -338,9 +367,10 @@ export class Renderer {
     }
 
     startPathAnimation(path: Position[], color: CellColor) {
+        this.blockedFeedback = null;
         this.resetClock();
         this.canvas.setAttribute("aria-busy", "true");
-        this.pathAnim = { path, progress: 0, color };
+        this.pathAnim = { path, progress: 0, elapsedMs: 0, color };
         this.onInvalidate?.();
     }
 
@@ -366,7 +396,13 @@ export class Renderer {
 
     /** True while any animation/effect needs a full frame rate. */
     isBusy(): boolean {
-        return this.isAnimating() || this.trailParticles.length > 0;
+        return (
+            this.isAnimating() ||
+            this.selectionProgress < 1 ||
+            this.blockedFeedback !== null ||
+            this.clearAfterglow !== null ||
+            this.trailParticles.length > 0
+        );
     }
 
     private chooseIdleActors(grid: Grid) {
@@ -392,7 +428,9 @@ export class Renderer {
         this.lastNow = now;
         this.dtF = dtMs / FRAME_MS;
         // Fixed creature poses avoid continuously growing the sprite cache.
-        if (!this.reducedMotion) this.timeT += (dtMs / 1000) * 2;
+        // Hover repaints must not be the clock for creature motion. Advance only
+        // during bounded effects; no idle timer or perpetual animation loop.
+        if (!this.reducedMotion && this.isBusy()) this.timeT += (dtMs / 1000) * 2;
         this.chooseIdleActors(grid);
 
         const ctx = this.ctx;
@@ -402,7 +440,11 @@ export class Renderer {
 
         ctx.drawImage(this.tileLayer!, 0, 0, this.boardSize, this.boardSize);
         this.drawCenterEmblem();
+        this.clearAfterglow?.drawGlow(ctx, this.centers, this.hexRadius, this.reducedMotion, this.connectionSprites);
+        this.removeAnim?.drawGlow(ctx, this.centers, this.hexRadius, this.reducedMotion, this.connectionSprites);
         this.drawInteraction();
+        this.drawBlockedFeedback();
+        this.drawMoveFeedback();
 
         const pathDest = this.pathAnim ? this.pathAnim.path[this.pathAnim.path.length - 1] : null;
 
@@ -416,7 +458,11 @@ export class Renderer {
 
             const clearing = this.removeAnim?.appearance(idx, this.reducedMotion);
             if (clearing) {
-                this.drawMicroCell(center.x, center.y, color, clearing.alpha, clearing.scale, false, seed);
+                ctx.save();
+                ctx.translate(center.x, center.y - clearing.lift * this.hexRadius);
+                ctx.scale(1 / clearing.stretch, clearing.stretch);
+                this.drawMicroCell(0, 0, color, clearing.alpha, clearing.scale, false, seed);
+                ctx.restore();
                 continue;
             }
 
@@ -436,8 +482,7 @@ export class Renderer {
             }
 
             const selected = this.selectedPos?.row === pos.row && this.selectedPos?.col === pos.col;
-            const pulse = selected && !this.reducedMotion ? Math.sin(this.selectedBounce) * 0.045 : 0;
-            this.drawMicroCell(center.x, center.y, color, 1, 1 + pulse, selected, seed);
+            this.drawMicroCell(center.x, center.y, color, 1, 1, selected, seed);
         }
 
         if (this.pathAnim && this.pathAnim.path.length > 0) {
@@ -447,14 +492,13 @@ export class Renderer {
             );
             if (!this.reducedMotion) this.emitTrailParticles(p.x, p.y, this.pathAnim.color);
             this.drawMicroCell(p.x, p.y, this.pathAnim.color, 1, 1, true, 0);
-            if (!this.reducedMotion) this.drawPathTrail(this.pathAnim.path, this.pathAnim.progress);
         }
 
         this.updateAndDrawTrailParticles();
+        this.clearAfterglow?.draw(ctx, this.centers, this.hexRadius, this.reducedMotion, this.connectionSprites);
         this.removeAnim?.draw(ctx, this.centers, this.hexRadius, this.reducedMotion, this.connectionSprites);
 
         this.updateAnimations();
-        this.selectedBounce += 0.14 * this.dtF;
         ctx.restore();
     }
 
@@ -489,7 +533,9 @@ export class Renderer {
 
     private drawInteraction() {
         const ctx = this.ctx;
-        if (this.hoverPos && !this.isAnimating()) {
+        const hoveredRejection =
+            this.hoverPos && this.blockedFeedback && cellIndex(this.hoverPos) === cellIndex(this.blockedFeedback.pos);
+        if (this.hoverPos && !this.isAnimating() && !hoveredRejection) {
             const p = this.centerOf(this.hoverPos);
             this.traceHex(ctx, p.x, p.y, this.hexRadius * 0.9);
             ctx.fillStyle = this.hoverBlocked ? "#ef96741a" : "#cce8b61c";
@@ -513,6 +559,31 @@ export class Renderer {
             ctx.stroke();
             ctx.setLineDash([]);
         }
+    }
+
+    private drawBlockedFeedback() {
+        const feedback = this.blockedFeedback;
+        if (!feedback) return;
+        const center = this.centerOf(feedback.pos);
+        const radius = this.hexRadius * 0.9;
+        const color = "#e8b86b";
+        // Hold briefly, then fade smoothly. No displacement, expansion, or flashing,
+        // so reduced motion can use the same small opacity-only acknowledgement.
+        const fade = Math.max(0, Math.min(1, (feedback.progress - 0.18) / 0.82));
+        const opacity = 1 - fade * fade * (3 - 2 * fade);
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.globalAlpha = opacity * 0.55;
+        ctx.drawImage(this.getGlowSprite(color), center.x - radius, center.y - radius, radius * 2, radius * 2);
+        this.traceHex(ctx, center.x, center.y, radius);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = opacity * 0.12;
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = opacity * 0.7;
+        ctx.lineWidth = Math.max(1.2, this.hexRadius * 0.025);
+        ctx.stroke();
+        ctx.restore();
     }
 
     /** Render a soft radial glow (inner color fading to outer) into a 64px sprite. */
@@ -557,27 +628,102 @@ export class Renderer {
         };
     }
 
-    private drawPathTrail(path: Position[], progress: number) {
-        if (path.length < 2) return;
+    /** Tap-driven route and destination feedback, painted beneath the creatures.
+     * Uses only the existing move frames; there is no separate timer or afterglow.
+     */
+    private drawMoveFeedback() {
+        const animation = this.pathAnim;
+        if (!animation?.path.length) return;
+        const { path, progress, elapsedMs } = animation;
         const ctx = this.ctx;
-        const totalSegments = path.length - 1;
-        const exact = progress * totalSegments;
-        const limit = Math.max(1, Math.ceil(exact));
-
-        ctx.beginPath();
         const start = this.centerOf(path[0]);
+        const destination = this.centerOf(path[path.length - 1]);
+        const color = "#dbe7bb";
+        ctx.save();
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = color;
+
+        // Show the chosen route immediately, including on devices without hover.
+        ctx.beginPath();
         ctx.moveTo(start.x, start.y);
-        for (let i = 1; i <= limit && i < path.length; i++) {
-            const p = this.centerOf(path[i]);
-            ctx.lineTo(p.x, p.y);
+        for (let i = 1; i < path.length; i++) {
+            const point = this.centerOf(path[i]);
+            ctx.lineTo(point.x, point.y);
         }
-        // Two strokes fake the old shadowBlur halo at a fraction of the cost
-        ctx.strokeStyle = "rgba(145, 220, 255, 0.16)";
-        ctx.lineWidth = 7;
+        ctx.globalAlpha = 0.3;
+        ctx.lineWidth = Math.max(1.1, this.hexRadius * 0.025);
         ctx.stroke();
-        ctx.strokeStyle = "rgba(145, 220, 255, 0.35)";
-        ctx.lineWidth = 2.2;
+
+        if (!this.reducedMotion && path.length > 1) {
+            // The brighter part ends at the creature, not at the next hex center.
+            const completed = Math.floor(progress * (path.length - 1));
+            const head = this.interpolatedPathPosition(path, progress);
+            ctx.beginPath();
+            ctx.moveTo(start.x, start.y);
+            for (let i = 1; i <= completed; i++) {
+                const point = this.centerOf(path[i]);
+                ctx.lineTo(point.x, point.y);
+            }
+            ctx.lineTo(head.x, head.y);
+            ctx.globalAlpha = 0.12;
+            ctx.lineWidth = Math.max(4, this.hexRadius * 0.16);
+            ctx.stroke();
+            ctx.globalAlpha = 0.55;
+            ctx.lineWidth = Math.max(1.3, this.hexRadius * 0.035);
+            ctx.stroke();
+        }
+
+        // One soft acknowledgement of the tap, then a steady target until arrival.
+        // Reduced motion gets the steady marker with no expanding/pulsing geometry.
+        const pulse = this.reducedMotion ? 0 : Math.max(0, 1 - elapsedMs / 320) ** 2;
+        const glowRadius = this.hexRadius * 0.95;
+        ctx.globalAlpha = 0.3 + pulse * 0.35;
+        ctx.drawImage(
+            this.getGlowSprite(color),
+            destination.x - glowRadius,
+            destination.y - glowRadius,
+            glowRadius * 2,
+            glowRadius * 2,
+        );
+        this.traceHex(ctx, destination.x, destination.y, this.hexRadius * 0.87);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.035 + pulse * 0.065;
+        ctx.fill();
+        ctx.globalAlpha = 0.35 + pulse * 0.35;
+        ctx.lineWidth = Math.max(1, this.hexRadius * 0.02);
         ctx.stroke();
+        ctx.restore();
+    }
+
+    /** A cached, soft-edged ring leaves the character itself unobscured. */
+    private drawSelectionHalo(cx: number, cy: number, color: CellColor, alpha: number) {
+        const theme = color === JOKER_COLOR ? JOKER_THEME : CELL_THEMES[color % CELL_THEMES.length];
+        let sprite = this.selectionHaloCache.get(theme.core);
+        if (!sprite) {
+            sprite = document.createElement("canvas");
+            sprite.width = sprite.height = 128;
+            const ctx = sprite.getContext("2d")!;
+            const ring = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+            ring.addColorStop(0, theme.core + "00");
+            ring.addColorStop(0.64, theme.core + "00");
+            ring.addColorStop(0.77, theme.core + "50");
+            ring.addColorStop(0.84, theme.core + "b8");
+            ring.addColorStop(0.91, theme.core + "45");
+            ring.addColorStop(1, theme.core + "00");
+            ctx.fillStyle = ring;
+            ctx.fillRect(0, 0, 128, 128);
+            this.selectionHaloCache.set(theme.core, sprite);
+        }
+        const pulse =
+            !this.reducedMotion && this.selectedPos && this.selectionProgress < 1
+                ? Math.sin(this.selectionProgress * Math.PI)
+                : 0;
+        const radius = this.hexRadius * 0.9;
+        this.ctx.save();
+        this.ctx.globalAlpha = alpha * (0.85 + pulse * 0.15);
+        this.ctx.drawImage(sprite, cx - radius, cy - radius, radius * 2, radius * 2);
+        this.ctx.restore();
     }
 
     /** Emit sparkle particles at the moving cell's current position (~1.5/frame at 60fps) */
@@ -637,8 +783,26 @@ export class Renderer {
 
     private updateAnimations() {
         let finished = false;
+        // Selection feedback is visual only: never lock input or complete a game phase.
+        this.selectionProgress = Math.min(1, this.selectionProgress + (this.dtF * FRAME_MS) / 320);
+
+        if (this.blockedFeedback) {
+            this.blockedFeedback.progress += (this.dtF * FRAME_MS) / 420;
+            if (this.blockedFeedback.progress >= 1) {
+                // A mouse preview during the fade must not leave this hex amber.
+                if (this.hoverPos && cellIndex(this.hoverPos) === cellIndex(this.blockedFeedback.pos))
+                    this.setHover(null);
+                this.blockedFeedback = null;
+            }
+        }
+
+        if (this.clearAfterglow) {
+            this.clearAfterglow.advance(this.dtF * FRAME_MS);
+            if (this.clearAfterglow.finished) this.clearAfterglow = null;
+        }
 
         if (this.pathAnim) {
+            this.pathAnim.elapsedMs += this.dtF * FRAME_MS;
             const segments = Math.max(1, this.pathAnim.path.length - 1);
             // Slower movement: ~60% of original speed
             this.pathAnim.progress += Math.min(0.065, 0.4 / segments) * this.dtF;
@@ -657,6 +821,8 @@ export class Renderer {
         }
 
         if (this.removeAnim?.advance(this.dtF * FRAME_MS)) {
+            // Keep only the latest tail, bounded even during successive clears.
+            this.clearAfterglow = this.reducedMotion ? null : this.removeAnim;
             this.removeAnim = null;
             finished = true;
         }
@@ -682,6 +848,7 @@ export class Renderer {
         const bob = this.reducedMotion ? 0 : Math.sin(this.timeT + (cx + cy) * 0.01) * radius * 0.012;
         cy += bob;
 
+        if (selected) this.drawSelectionHalo(cx, cy, color, alpha);
         ctx.globalAlpha = alpha;
 
         // The atlas has a 110px safe radius in each 256px tile. Including
@@ -689,6 +856,14 @@ export class Renderer {
         const size = this.hexRadius * 1.64 * scale;
         ctx.save();
         ctx.translate(cx, cy);
+        if (selected && this.selectedPos && !this.pathAnim && !this.reducedMotion && this.selectionProgress < 1) {
+            // Transform only the sprite; its selection halo stays still. Squared
+            // sine eases both endpoints, so the final pose settles without a snap.
+            const envelope = Math.sin(this.selectionProgress * Math.PI) ** 2;
+            ctx.rotate(this.selectionGreeting.tilt * envelope);
+            const squash = this.selectionGreeting.squash * Math.sin(this.selectionProgress * Math.PI * 2) * envelope;
+            ctx.scale(1 + squash, 1 - squash);
+        }
         const personalTime = this.timeT + phaseSeed * 1.37;
         if (!this.reducedMotion && !this.isBusy() && phaseSeed === this.wiggleCell) {
             // One character gets a small greeting every 28 seconds.
@@ -717,20 +892,6 @@ export class Renderer {
             }
         }
         ctx.restore();
-
-        if (selected) {
-            const theme = color === JOKER_COLOR ? JOKER_THEME : CELL_THEMES[color % CELL_THEMES.length];
-            // Two strokes of one path fake the old shadowBlur halo at a fraction of the cost
-            ctx.strokeStyle = theme.core;
-            ctx.beginPath();
-            ctx.arc(cx, cy, this.hexRadius * 0.7, 0, Math.PI * 2);
-            ctx.globalAlpha = alpha * 0.35;
-            ctx.lineWidth = this.hexRadius * 0.12;
-            ctx.stroke();
-            ctx.globalAlpha = alpha;
-            ctx.lineWidth = 2;
-            ctx.stroke();
-        }
 
         ctx.globalAlpha = 1;
     }

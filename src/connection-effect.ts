@@ -1,6 +1,9 @@
+import { ElementParticles, type ParticleMotion } from "./element-particles";
 import { cellIndex, GRID_SIZE, JOKER_COLOR, MIN_MATCH, type Grid, type Position } from "./game";
 
-export const CONNECTION_DURATION_MS = 460;
+export const CONNECTION_DURATION_MS = 620;
+// The last part is decoration only; the next move need not wait for it.
+const AFTERGLOW_END = 1.6;
 
 export interface Point {
     x: number;
@@ -115,6 +118,7 @@ export class LightningBolt {
 /** Fixed-size glow sprites shared by every clear and retained across board resizes. */
 export class ConnectionSprites {
     private cache: { color: string; glow: HTMLCanvasElement }[] = [];
+    readonly particles = new ElementParticles();
 
     constructor(private colors: readonly string[]) {}
 
@@ -138,9 +142,39 @@ export class ConnectionSprites {
     }
 }
 
+interface ClearAppearance {
+    alpha: number;
+    scale: number;
+    stretch: number;
+    lift: number;
+}
+
+interface ClearParticle {
+    trajectory: { start: Point; linear: Point; quadratic: Point; cubic: Point };
+    pace: number;
+    delay: number;
+    motion: ParticleMotion;
+}
+
+/** Prepare cubic Bézier coefficients once; drawing needs only multiply/add operations. */
+function particleTrajectory(start: Point, first: Point, second: Point, end: Point): ClearParticle["trajectory"] {
+    return {
+        start,
+        linear: { x: 3 * (first.x - start.x), y: 3 * (first.y - start.y) },
+        quadratic: {
+            x: 3 * (second.x - 2 * first.x + start.x),
+            y: 3 * (second.y - 2 * first.y + start.y),
+        },
+        cubic: {
+            x: end.x - 3 * second.x + 3 * first.x - start.x,
+            y: end.y - 3 * second.y + 3 * first.y - start.y,
+        },
+    };
+}
+
 interface StoneVisual extends ChargedStone {
-    appearance: { alpha: number; scale: number };
-    sparks: { dx: number; dy: number; reach: number }[];
+    appearance: ClearAppearance;
+    sparks: ClearParticle[];
 }
 
 interface ConnectionVisual {
@@ -151,7 +185,7 @@ interface ConnectionVisual {
     branchSide: number;
 }
 
-/** One bounded charge → discharge → dissolve; all geometry stays in board coordinates. */
+/** One bounded charge → bounce → dissolve, followed by a non-blocking afterglow. */
 export class ConnectionEffect {
     private stones = new Map<number, StoneVisual>();
     private connections: ConnectionVisual[];
@@ -166,12 +200,54 @@ export class ConnectionEffect {
         const sparkBudget = Math.floor(96 / Math.max(1, plan.stones.size));
         for (const stone of plan.stones.values()) {
             const count = Math.min(3 + Math.round(stone.strength * 5), sparkBudget);
-            const sparks = Array.from({ length: count }, (_, i) => {
-                const particleSeed = seed + stone.index * 13 + i;
-                const angle = (i / count) * Math.PI * 2 + noise(particleSeed) * 0.6;
-                return { dx: Math.cos(angle), dy: Math.sin(angle), reach: 0.8 + noise(particleSeed + 1) * 0.2 };
+            // Each creature gets its own drift, not a rotated copy of an evenly
+            // spaced burst. Individual particles have independent start/end headings
+            // and curve controls; some peel sideways while others curl or float out.
+            const stoneSeed = seed + stone.index * 397;
+            const driftAngle = noise(stoneSeed) * Math.PI;
+            const driftLength = 0.25 + noise(stoneSeed + 1) * 0.12;
+            const drift = { x: Math.cos(driftAngle) * driftLength, y: Math.sin(driftAngle) * driftLength };
+            const riseBias = 0.8 + noise(stoneSeed + 2) * 0.4;
+            const sparks: ClearParticle[] = Array.from({ length: count }, (_, i) => {
+                const particleSeed = stoneSeed + (i + 1) * 37;
+                const startAngle = noise(particleSeed) * Math.PI;
+                const startRadius = 0.18 + noise(particleSeed + 1) * 0.08;
+                const start = { x: Math.cos(startAngle) * startRadius, y: Math.sin(startAngle) * startRadius };
+                const launchAngle = noise(particleSeed + 2) * Math.PI;
+                const launchLength = 0.35 + noise(particleSeed + 3) * 0.15;
+                const first = {
+                    x: start.x + Math.cos(launchAngle) * launchLength + drift.x,
+                    y: start.y + Math.sin(launchAngle) * launchLength + drift.y,
+                };
+                const endAngle = noise(particleSeed + 4) * Math.PI;
+                const reach = 0.45 + noise(particleSeed + 5) * 0.2;
+                const curl = noise(particleSeed + 6) * 0.45;
+                const dx = Math.cos(endAngle);
+                const dy = Math.sin(endAngle);
+                const end = { x: drift.x + dx * reach, y: drift.y + dy * reach };
+                const second = {
+                    x: end.x - dx * reach * 0.3 - dy * curl,
+                    y: end.y - dy * reach * 0.3 + dx * curl,
+                };
+                return {
+                    trajectory: particleTrajectory(start, first, second, end),
+                    // Both slow departures and quicker departures; all still end on time.
+                    pace: noise(particleSeed + 7) * 0.7,
+                    delay: (noise(particleSeed + 8) + 1) * 0.035,
+                    motion: {
+                        phase: noise(particleSeed + 9) * Math.PI,
+                        spin: (noise(particleSeed + 10) > 0 ? 1 : -1) * (1.2 + noise(particleSeed + 11) * 0.6),
+                        rise: riseBias * (1 + noise(particleSeed + 12) * 0.2),
+                        flutter: 1 + noise(particleSeed + 13) * 0.4,
+                        flutterRate: 1.4 + noise(particleSeed + 14) * 0.4,
+                    },
+                };
             });
-            this.stones.set(stone.index, { ...stone, appearance: { alpha: 1, scale: 1 }, sparks });
+            this.stones.set(stone.index, {
+                ...stone,
+                appearance: { alpha: 1, scale: 1, stretch: 1, lift: 0 },
+                sparks,
+            });
         }
         this.connections = plan.connections.map(({ from, to }) => {
             const source = this.stones.get(from)!;
@@ -186,25 +262,74 @@ export class ConnectionEffect {
     }
 
     advance(dtMs: number): boolean {
-        this.progress = clamp(this.progress + dtMs / CONNECTION_DURATION_MS);
+        this.progress = Math.min(AFTERGLOW_END, this.progress + Math.max(0, dtMs) / CONNECTION_DURATION_MS);
         return this.progress >= 1;
     }
 
+    get finished(): boolean {
+        return this.progress >= AFTERGLOW_END;
+    }
+
     /** Borrowed per-stone state, updated in place instead of allocated each frame. */
-    appearance(index: number, reduced: boolean): Readonly<{ alpha: number; scale: number }> | null {
+    appearance(index: number, reduced: boolean): Readonly<ClearAppearance> | null {
         const stone = this.stones.get(index);
         if (!stone) return null;
         const appearance = stone.appearance;
         if (reduced) {
-            appearance.alpha = 1 - this.progress;
+            appearance.alpha = 1 - clamp(this.progress);
             appearance.scale = 1;
+            appearance.stretch = 1;
+            appearance.lift = 0;
         } else {
             const local = clamp((this.progress - stone.arrival) / 0.62);
-            const dissolve = clamp((local - 0.18) / 0.72);
+            const crouch = Math.sin(clamp(local / 0.22) * Math.PI);
+            const hop = Math.sin(clamp((local - 0.16) / 0.5) * Math.PI);
+            const fade = clamp((local - 0.36) / 0.64);
+            const dissolve = fade * fade * (3 - 2 * fade);
             appearance.alpha = 1 - dissolve;
-            appearance.scale = (1 + Math.sin(local * Math.PI) * 0.08) * (1 - dissolve * 0.85);
+            appearance.scale = 1 - dissolve * 0.3;
+            appearance.stretch = 1 - crouch * 0.07 + hop * 0.045;
+            appearance.lift = hop * 0.07;
         }
         return appearance;
+    }
+
+    /** Paint beneath creatures so a lingering glow never obscures a new arrival. */
+    drawGlow(
+        ctx: CanvasRenderingContext2D,
+        centers: readonly (Point | null)[],
+        radius: number,
+        reduced: boolean,
+        sprites: ConnectionSprites,
+    ) {
+        ctx.save();
+        for (const stone of this.stones.values()) {
+            const age = this.progress - (reduced ? 0 : stone.arrival);
+            if (age <= 0) continue;
+            const envelope = reduced
+                ? Math.sin(clamp(this.progress) * Math.PI) * 0.25
+                : clamp(age / 0.2) * clamp((AFTERGLOW_END - this.progress) / 0.85) * 0.6;
+            if (envelope <= 0) continue;
+            const center = centers[stone.index]!;
+            const { color, glow } = sprites.get(stone.color);
+            const size = radius * 1.05;
+            ctx.globalAlpha = envelope;
+            ctx.drawImage(glow, center.x - size, center.y - size, size * 2, size * 2);
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const angle = ((60 * i - 30) * Math.PI) / 180;
+                const x = center.x + Math.cos(angle) * radius * 0.9;
+                const y = center.y + Math.sin(angle) * radius * 0.9;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = envelope * 0.35;
+            ctx.lineWidth = Math.max(0.7, radius * 0.018);
+            ctx.stroke();
+        }
+        ctx.restore();
     }
 
     draw(
@@ -248,29 +373,31 @@ export class ConnectionEffect {
             }
         }
         for (const stone of this.stones.values()) {
+            if (reduced) break;
             const center = centers[stone.index]!;
-            const local = reduced ? this.progress : clamp((this.progress - stone.arrival) / 0.62);
-            if (local <= 0 || local >= 1) continue;
-            const envelope = Math.sin(local * Math.PI);
-            const glowRadius = radius * (reduced ? 0.85 : 0.8 + local * (0.7 + stone.strength * 0.5));
-            const { color, glow } = sprites.get(stone.color);
-            ctx.globalAlpha = envelope * (reduced ? 0.25 : 0.75);
-            ctx.drawImage(glow, center.x - glowRadius, center.y - glowRadius, glowRadius * 2, glowRadius * 2);
-            if (reduced) continue;
-            // Directions and reach are prepared once. Only distance changes.
-            const burst = clamp((local - 0.16) / 0.84);
-            ctx.globalAlpha = Math.sin(burst * Math.PI) * (1 - burst);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = Math.max(1, radius * 0.035);
-            ctx.beginPath();
-            const reach = radius * (0.2 + burst * (0.65 + stone.strength * 0.5));
-            const tail = radius * 0.16 * (1 - burst);
+            // Motes emerge as the sprite fades, then drift rather than shoot outward.
+            const age = this.progress - stone.arrival - 0.22;
+            if (age <= 0 || age >= 0.72) continue;
             for (const spark of stone.sparks) {
-                const distance = reach * spark.reach;
-                ctx.moveTo(center.x + spark.dx * distance, center.y + spark.dy * distance);
-                ctx.lineTo(center.x + spark.dx * (distance + tail), center.y + spark.dy * (distance + tail));
+                // A small stagger, but every particle still ends at the same deadline.
+                // No additional wakeups, particles, or per-frame random samples.
+                const burst = clamp((age - spark.delay) / (0.72 - spark.delay));
+                if (burst <= 0 || burst >= 1) continue;
+                ctx.globalAlpha = clamp(burst / 0.16) * clamp((1 - burst) / 0.55) * 0.85;
+                const travel = burst + burst * (1 - burst) * spark.pace;
+                const { start, linear, quadratic, cubic } = spark.trajectory;
+                const x = ((cubic.x * travel + quadratic.x) * travel + linear.x) * travel + start.x;
+                const y = ((cubic.y * travel + quadratic.y) * travel + linear.y) * travel + start.y;
+                sprites.particles.draw(
+                    ctx,
+                    stone.color,
+                    center.x + radius * x,
+                    center.y + radius * y,
+                    radius,
+                    burst,
+                    spark.motion,
+                );
             }
-            ctx.stroke();
         }
         ctx.restore();
     }

@@ -83,12 +83,12 @@ test("reduced motion fades all stones together without scaling; progress is fram
     const { grid, positions } = fixture();
     const slow = new ConnectionEffect(positions, grid);
     const fast = new ConnectionEffect(positions, grid);
-    slow.advance(230);
-    for (let i = 0; i < 10; i++) fast.advance(23);
+    slow.advance(CONNECTION_DURATION_MS / 2);
+    for (let i = 0; i < 10; i++) fast.advance(CONNECTION_DURATION_MS / 20);
     expect(slow.progress).toBeCloseTo(fast.progress);
     for (const index of positions) {
         const appearance = slow.appearance(index, true);
-        expect(appearance).toEqual({ alpha: 0.5, scale: 1 });
+        expect(appearance).toEqual({ alpha: 0.5, scale: 1, stretch: 1, lift: 0 });
         expect(slow.appearance(index, false)).toBe(appearance);
     }
 });
@@ -140,6 +140,16 @@ test("glow sprites are reused across clears, resize, and reduced-motion changes"
         };
         try {
             const cached = palette.map((_, index) => sprites.get(index));
+            for (let color = 0; color < palette.length; color++) {
+                sprites.particles.draw(ctx, color, 32, 32, 20, 0.5, {
+                    phase: 0,
+                    spin: 1,
+                    rise: 1,
+                    flutter: 1,
+                    flutterRate: 1,
+                });
+            }
+            const warmGradients = gradients;
             for (const size of [320, 430, 1365]) {
                 canvas.width = canvas.height = size;
                 const centers = Array.from({ length: 81 }, (_, index) => ({
@@ -152,12 +162,12 @@ test("glow sprites are reused across clears, resize, and reduced-motion changes"
                     effect.draw(ctx, centers, size / 16, frame > 7, sprites);
                 }
             }
-            return { gradients, reused: cached.every((sprite, index) => sprite === sprites.get(index)) };
+            return { gradients, warmGradients, reused: cached.every((sprite, index) => sprite === sprites.get(index)) };
         } finally {
             CanvasRenderingContext2D.prototype.createRadialGradient = gradient;
         }
     });
-    expect(result).toEqual({ gradients: 8, reused: true });
+    expect(result).toEqual({ gradients: 16, warmGradients: 16, reused: true });
 });
 
 declare global {
@@ -238,8 +248,15 @@ for (const reduced of [false, true]) {
             }
             return { completed: state.completed, busy: state.renderer.isBusy() };
         });
-        expect(finished).toEqual({ completed: 1, busy: false });
+        // The game phase finishes before the decorative tail; reduced motion has no tail.
+        expect(finished).toEqual({ completed: 1, busy: !reduced });
         await expect(page.locator("#connection-preview")).toHaveAttribute("aria-busy", "false");
+        const settled = await page.evaluate(() => {
+            const state = window.connectionTest;
+            for (let i = 0; i < 12; i++) state.renderer.draw(state.grid, (state.now += 1000 / 30));
+            return { completed: state.completed, busy: state.renderer.isBusy() };
+        });
+        expect(settled).toEqual({ completed: 1, busy: false });
         const reset = await page.evaluate(() => {
             const state = window.connectionTest;
             state.renderer.startRemoveAnimation(state.positions, state.grid);

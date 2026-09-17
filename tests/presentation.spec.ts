@@ -246,7 +246,8 @@ for (const reducedMotion of ["reduce", "no-preference"] as const) {
             );
         });
         await expect(page.locator("#message")).toContainText("Sun selected");
-        await page.clock.runFor(300);
+        // Allow the 320 ms greeting and its final settled frame to complete.
+        await page.clock.runFor(450);
         const counts = () => page.evaluate(() => [window.testFrames, window.testPaints]);
         const before = await counts();
         await page.clock.runFor(10000);

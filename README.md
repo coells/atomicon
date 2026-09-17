@@ -22,14 +22,15 @@ pnpm format:check
 pnpm build
 ```
 
-Tests cover desktop Chromium and phone-emulated Chromium and WebKit, including full games, scoring, restart cancellation, keyboard controls, preferences, audio suspension, and crossfades between the two recorded music tracks. Screenshots and failure traces go to `test-results/`.
+Tests cover desktop Chromium and touch-emulated Chromium and WebKit at phone and tablet sizes. They include full games, scoring, restart cancellation, keyboard controls, preferences, particle variation, visual feedback, idle canvas sleep, audio suspension, and crossfades between the two recorded music tracks. Screenshots and failure traces go to `test-results/`.
 
 `pnpm test:production` builds and smoke-tests the deployed asset paths. `pnpm preview` serves the production build at `/atomicon/`, the existing GitHub Pages base path.
 
 ## Controls
 
 - Click or tap a creature, then an empty destination. A clear path is required.
-- Hover over an empty destination to preview the path.
+- Hover over an empty destination to preview the path. Tapping a valid destination lights the route during movement; no hover is required.
+- Selecting a creature shows a short greeting and a steady halo. An unreachable destination fades amber without clearing the selection.
 - Use arrow keys on the focused board to navigate, and Enter or Space to select. Escape deselects.
 - Tap the music icon or press M to mute. The gear opens inline volume and motion controls.
 - The restart arrow asks for inline confirmation. Settings and confirmation expand above the bottom toolbar. Nothing covers or locks the board.
@@ -42,7 +43,9 @@ The original hexagonal board fills phone width, bounded by available height in l
 
 The supplied character artwork is packed into one transparent WebP atlas. Sandstone replaces Water so Ice is the only blue character. Sprite padding accounts for the full silhouette and animation bounds. The supplied elemental background is static; eight small CSS motes drift over it.
 
-The board renders at up to 20 fps at rest and 30 fps during transitions, with capped particles and a maximum 2× pixel ratio. Characters breathe gently. Only one character is eligible for a short wiggle every 28 seconds and a faint glint every 41 seconds. Reduced motion disables ambient movement and stops idle canvas rendering. Hidden pages stop canvas work, CSS animations, and audio playback.
+Energy use takes priority over continuous animation. The canvas sleeps at rest, including while a creature is selected. Effects run at up to 30 fps with a maximum 2× pixel ratio. The center atom advances only while the board is already animating; pointer movement does not drive its clock. Hidden pages stop canvas work, CSS animations, and audio playback.
+
+Selection greetings last 320 ms; rejected destinations fade over 420 ms. Route and destination feedback reuse the movement frames. Clears keep the connecting lightning, add a small bounce and fade, and resume play after 620 ms. A decorative glow finishes within about one second of the clear starting. Each clear has at most 96 elemental particles, with independent curves and a separate drift for each creature. Shapes and halos are cached; randomness is sampled before drawing rather than on every frame. Reduced motion removes greetings and moving particles, uses steady route markers, and keeps opacity-only clear and rejection feedback.
 
 `track1.m4a` and `track2.m4a` alternate with eight-second equal-power crossfades, including the return to track1. Two media elements stream AAC rather than decoding whole songs into JavaScript audio buffers. Defaults are 10% music and 50% effects; saved choices are preserved. Effects-only audio suspends after seven seconds of inactivity.
 
@@ -60,7 +63,9 @@ uv run scripts/prepare_music.py
 The image script normalizes transparent sprites, builds the atlas and a contact sheet, and compresses the background. The music script converts the supplied Opus-in-M4A files to AAC-in-M4A for Safari compatibility and trims leading near-silence. Both scripts pin their own dependencies.
 
 - `src/game.ts`: original board, matching, pathfinding, and scoring rules.
-- `src/renderer.ts`: board materials, creature sprites, path previews, and effects.
+- `src/renderer.ts`: board materials, creature sprites, touch feedback, path previews, and effects.
+- `src/connection-effect.ts`: match timing, lightning, particle trajectories, and afterglow.
+- `src/element-particles.ts`: cached elemental particle shapes and motion.
 - `src/main.ts`: turns, inline controls, and frame scheduling.
 - `src/characters.ts`: atlas loading and character identities.
 - `src/playlist.ts`: streaming music and crossfade lifecycle.

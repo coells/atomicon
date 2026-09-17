@@ -313,7 +313,7 @@ class AtomiconGame {
         const path = findPath(this.grid, this.selected, pos);
         if (!path?.length) {
             this.sound.effect("blocked");
-            this.renderer.setHover(pos, null, true);
+            this.renderer.showBlockedDestination(pos);
             this.setMessage("That path is blocked. Try another space.");
             return;
         }
